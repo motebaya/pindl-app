@@ -1,0 +1,1541 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:video_player/video_player.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/neumorphism_theme.dart';
+import '../../core/utils/pin_url_validator.dart';
+import '../../data/models/history_item.dart';
+import '../../data/models/job_state.dart';
+import '../providers/history_provider.dart';
+import '../providers/job_provider.dart';
+import '../providers/log_provider.dart';
+import '../providers/settings_provider.dart';
+import '../providers/theme_provider.dart';
+import '../widgets/console_panel.dart';
+import '../widgets/soft_button.dart';
+import '../widgets/soft_card.dart';
+import '../widgets/soft_checkbox.dart';
+import '../widgets/soft_text_field.dart';
+import '../widgets/soft_toggle.dart';
+import 'about_page.dart';
+import 'downloads_page.dart';
+import 'history_page.dart';
+
+/// Main home page - Single page app design
+/// Flow: Submit (fetch info) -> Result Info -> Download (confirm)
+class HomePage extends ConsumerStatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  ConsumerState<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends ConsumerState<HomePage> {
+  final _inputController = TextEditingController();
+  String? _inputError;
+  String? _inputType;
+  
+  // Video player controller for preview
+  VideoPlayerController? _videoController;
+  String? _currentVideoUrl;
+  bool _isVideoInitialized = false;
+
+  @override
+  void dispose() {
+    _inputController.dispose();
+    _disposeVideoController();
+    super.dispose();
+  }
+  
+  void _disposeVideoController() {
+    _videoController?.dispose();
+    _videoController = null;
+    _currentVideoUrl = null;
+    _isVideoInitialized = false;
+  }
+  
+  Future<void> _initVideoController(String videoUrl) async {
+    // Skip if same URL already loaded
+    if (_currentVideoUrl == videoUrl && _isVideoInitialized) return;
+    
+    // Dispose old controller
+    _disposeVideoController();
+    _currentVideoUrl = videoUrl;
+    
+    try {
+      _videoController = VideoPlayerController.networkUrl(
+        Uri.parse(videoUrl),
+        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+      );
+      
+      await _videoController!.initialize();
+      _videoController!.setLooping(true);
+      _videoController!.setVolume(0); // Muted autoplay
+      await _videoController!.play();
+      
+      if (mounted) {
+        setState(() {
+          _isVideoInitialized = true;
+        });
+      }
+    } catch (e) {
+      debugPrint('Video init error: $e');
+      _disposeVideoController();
+    }
+  }
+
+  void _validateInput(String value) {
+    setState(() {
+      if (value.isEmpty) {
+        _inputError = null;
+        _inputType = null;
+        // Reset continue mode when input becomes empty
+        ref.read(settingsProvider.notifier).setContinueMode(false);
+        ref.read(jobProvider.notifier).reset();
+        return;
+      }
+
+      final type = PinUrlValidator.detectInputType(value);
+      if (type == null) {
+        _inputError = 'Invalid input. Enter @username or pin URL';
+        _inputType = null;
+      } else {
+        _inputError = null;
+        _inputType = type;
+      }
+    });
+  }
+  
+  /// Clear input and reset related state
+  void _clearInput() {
+    _inputController.clear();
+    setState(() {
+      _inputError = null;
+      _inputType = null;
+    });
+    // Dispose video preview if any
+    _disposeVideoController();
+    // Reset continue mode when input is cleared
+    ref.read(settingsProvider.notifier).setContinueMode(false);
+    // Reset job state if it depends on input
+    ref.read(jobProvider.notifier).reset();
+  }
+  
+  /// Static output path display - downloads go to Downloads/PinDL via MediaStore
+  Widget _buildOutputPath(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: NeumorphismTheme.getSurfaceColor(isDark),
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: NeumorphismTheme.getInsetShadows(isDark, intensity: 0.4),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.folder_outlined,
+            size: 16,
+            color: NeumorphismTheme.getSecondaryTextColor(isDark),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Output: Downloads/PinDL',
+              style: TextStyle(
+                fontSize: 13,
+                color: NeumorphismTheme.getTextColor(isDark),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showConfirmDialog({
+    required String title,
+    required String message,
+    required VoidCallback onConfirm,
+  }) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('CANCEL'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              onConfirm();
+            },
+            child: const Text('YES'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final themeMode = ref.watch(themeProvider);
+    final settings = ref.watch(settingsProvider);
+    final jobState = ref.watch(jobProvider);
+    final logService = ref.watch(logServiceProvider);
+    
+    // Listen for job state changes to update history
+    ref.listen<AppJobState>(jobProvider, (previous, next) {
+      // Update extraction history when transitioning from fetchingInfo to another state
+      if (previous?.status == JobStatus.fetchingInfo && 
+          next.status != JobStatus.fetchingInfo) {
+        if (next.status == JobStatus.readyToDownload) {
+          ref.read(historyProvider.notifier).updateLast(HistoryStatus.success);
+        } else if (next.status == JobStatus.failed) {
+          ref.read(historyProvider.notifier).updateLast(
+            HistoryStatus.failed, 
+            errorMessage: next.error,
+          );
+        } else if (next.status == JobStatus.cancelled) {
+          ref.read(historyProvider.notifier).updateLast(HistoryStatus.cancelled);
+        }
+      }
+    });
+
+    return GestureDetector(
+      // Dismiss keyboard when tapping outside input area
+      onTap: () => FocusScope.of(context).unfocus(),
+      child: Scaffold(
+        backgroundColor: NeumorphismTheme.getBackgroundColor(isDark),
+        // Prevent footer from moving up when keyboard appears
+        resizeToAvoidBottomInset: false,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // Top bar
+              _buildTopBar(isDark, themeMode),
+
+              // Main content
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      // Main card with all controls
+                      SoftCard(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Card header row: History (left), Welcome text (center), Downloads (right)
+                            _buildCardHeader(isDark),
+                            const SizedBox(height: 16),
+
+                            // Input field (FIRST)
+                            _buildInputSection(isDark, jobState),
+                            const SizedBox(height: 16),
+
+                            // Static output path display (SECOND)
+                            _buildOutputPath(isDark),
+                            const SizedBox(height: 16),
+
+                            // Options grid (2 columns, compact)
+                            _buildOptionsGrid(isDark, settings),
+                            const SizedBox(height: 16),
+
+                            // Submit row (fetch info only)
+                            _buildSubmitRow(isDark, jobState, settings),
+
+                            // Result info card (shown after submit success)
+                            if (jobState.hasResults) ...[
+                              const SizedBox(height: 16),
+                              _buildResultsSection(isDark, jobState, settings),
+                            ],
+
+                            // Download confirmation row (shown after info loaded)
+                            if (jobState.hasResults) ...[
+                              const SizedBox(height: 16),
+                              _buildDownloadConfirmation(isDark, jobState, settings),
+                            ],
+
+                            const SizedBox(height: 16),
+
+                            // Console panel
+                            ConsolePanel(
+                              logStream: logService.stream,
+                              initialEntries: logService.entries,
+                              height: 180,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Footer
+              _buildFooter(isDark),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopBar(bool isDark, ThemeMode themeMode) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          // App icon (left)
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: NeumorphismTheme.getCardColor(isDark),
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: NeumorphismTheme.getRaisedShadows(isDark, intensity: 0.5),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.asset(
+                'assets/icons/app_icon.png',
+                width: 36,
+                height: 36,
+                fit: BoxFit.cover,
+              ),
+            ),
+          ),
+
+          // Expanded spacer for centering title
+          const Expanded(child: SizedBox()),
+
+          // Title (center)
+          Text(
+            'PinDL',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: NeumorphismTheme.getTextColor(isDark),
+            ),
+          ),
+
+          // Expanded spacer for centering title
+          const Expanded(child: SizedBox()),
+
+          // Theme toggle (right)
+          SoftToggle(
+            value: themeMode == ThemeMode.light ||
+                (themeMode == ThemeMode.system &&
+                    MediaQuery.of(context).platformBrightness == Brightness.light),
+            onChanged: (_) => ref.read(themeProvider.notifier).toggleTheme(context),
+          ),
+          const SizedBox(width: 8),
+
+          // About button (right)
+          SoftIconButton(
+            icon: Icons.info_outline,
+            tooltip: 'About',
+            size: 36,
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const AboutPage()),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCardHeader(bool isDark) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // History button (left)
+        SoftIconButton(
+          icon: Icons.history,
+          tooltip: 'History',
+          size: 36,
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const HistoryPage()),
+          ),
+        ),
+
+        // Welcome text (center)
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              'Welcome to PinDL. Please make sure the URL or username you enter is public and visible to anyone.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                color: NeumorphismTheme.getSecondaryTextColor(isDark),
+                height: 1.4,
+              ),
+            ),
+          ),
+        ),
+
+        // Downloads button (right)
+        SoftIconButton(
+          icon: Icons.download,
+          tooltip: 'Downloads',
+          size: 36,
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const DownloadsPage()),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildInputSection(bool isDark, AppJobState jobState) {
+    final isDisabled = jobState.isExtracting || jobState.isDownloading;
+    final hasText = _inputController.text.isNotEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Type label above the field (USER or PIN)
+        if (_inputType != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6, left: 4),
+            child: Text(
+              _inputType == 'username' ? 'USER' : 'PIN',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: AppColors.success,
+              ),
+            ),
+          ),
+        SoftTextField(
+          controller: _inputController,
+          hintText: 'Enter @username or pin URL (pin.it / pinterest.com/pin/...)',
+          enabled: !isDisabled,
+          errorText: _inputError,
+          onChanged: _validateInput,
+          // Clear icon inside the field (right side)
+          suffixIcon: hasText && !isDisabled
+              ? IconButton(
+                  icon: Icon(
+                    Icons.clear,
+                    size: 18,
+                    color: NeumorphismTheme.getSecondaryTextColor(isDark),
+                  ),
+                  onPressed: _clearInput,
+                  tooltip: 'Clear input',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                )
+              : null,
+        ),
+      ],
+    );
+  }
+
+  /// Options grid - 2 columns, compact checkboxes
+  /// Row 1: save metadata | overwrite
+  /// Row 2: verbose logs  | continue (username) OR show preview (pin)
+  Widget _buildOptionsGrid(bool isDark, SettingsState settings) {
+    final isUrlInput = _inputType == 'pin';
+    final isUsernameInput = _inputType == 'username';
+    final jobState = ref.watch(jobProvider);
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 2-column grid for options
+        Row(
+          children: [
+            // Column 1
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Row 1 Col 1: Save metadata
+                  SoftCheckbox(
+                    value: settings.saveMetadata,
+                    label: 'Save metadata',
+                    compact: true,
+                    onChanged: (v) => ref.read(settingsProvider.notifier).setSaveMetadata(v),
+                  ),
+                  const SizedBox(height: 4),
+                  // Row 2 Col 1: Verbose logs
+                  SoftCheckbox(
+                    value: settings.verbose,
+                    label: 'Verbose logs',
+                    compact: true,
+                    onChanged: (v) => ref.read(settingsProvider.notifier).setVerbose(v),
+                  ),
+                ],
+              ),
+            ),
+            // Column 2
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Row 1 Col 2: Overwrite
+                  SoftCheckbox(
+                    value: settings.overwrite,
+                    label: 'Overwrite',
+                    compact: true,
+                    onChanged: (v) => ref.read(settingsProvider.notifier).setOverwrite(v),
+                  ),
+                  const SizedBox(height: 4),
+                  // Row 2 Col 2: Continue (username) OR Show preview (pin)
+                  if (isUsernameInput) ...[
+                    SoftCheckbox(
+                      value: settings.continueMode,
+                      label: 'Continue',
+                      compact: true,
+                      onChanged: (v) async {
+                        ref.read(settingsProvider.notifier).setContinueMode(v);
+                        // If enabling continue mode, try to load existing metadata
+                        if (v && _inputController.text.isNotEmpty) {
+                          final success = await ref.read(jobProvider.notifier)
+                              .loadExistingMetadata(_inputController.text);
+                          if (!success && mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'No metadata found for @${_inputController.text.replaceAll('@', '')}. Run a fresh download first.',
+                                ),
+                                backgroundColor: AppColors.warning,
+                                duration: const Duration(seconds: 3),
+                              ),
+                            );
+                            // Disable continue mode if no metadata found
+                            ref.read(settingsProvider.notifier).setContinueMode(false);
+                          }
+                        } else if (!v) {
+                          // Disable continue mode - reset job state
+                          ref.read(jobProvider.notifier).reset();
+                        }
+                      },
+                    ),
+                  ] else if (isUrlInput) ...[
+                    SoftCheckbox(
+                      value: settings.showPreview,
+                      label: 'Show preview',
+                      compact: true,
+                      onChanged: (v) => ref.read(settingsProvider.notifier).setShowPreview(v),
+                    ),
+                  ] else ...[
+                    // Placeholder for alignment when no input type detected
+                    const SizedBox(height: 24),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+
+        // Overwrite warning
+        if (settings.overwrite) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.warning.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.warning_amber, size: 14, color: AppColors.warning),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'All existing downloaded files will be overwritten',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: AppColors.warning,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+
+        const SizedBox(height: 12),
+
+        // Media type selection
+        Text(
+          'Media Type',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: NeumorphismTheme.getSecondaryTextColor(isDark),
+          ),
+        ),
+        const SizedBox(height: 6),
+        
+        // For single pin (URL input): use checkboxes for multi-select
+        // For username: use radio buttons (single select)
+        if (isUrlInput) ...[
+          // Multi-select checkboxes for single pin
+          Row(
+            children: [
+              SoftCheckbox(
+                value: settings.downloadImage,
+                label: 'Image',
+                compact: true,
+                onChanged: (v) {
+                  // Prevent unchecking if video is also unchecked
+                  if (!v && !settings.downloadVideo) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: const Text(
+                          'You must select either video or image, or select both.',
+                        ),
+                        backgroundColor: AppColors.warning,
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                    return;
+                  }
+                  ref.read(settingsProvider.notifier).setDownloadImage(v);
+                },
+              ),
+              const SizedBox(width: 24),
+              SoftCheckbox(
+                value: settings.downloadVideo,
+                label: 'Video',
+                compact: true,
+                onChanged: (v) {
+                  // Prevent unchecking if image is also unchecked
+                  if (!v && !settings.downloadImage) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: const Text(
+                          'You must select either video or image, or select both.',
+                        ),
+                        backgroundColor: AppColors.warning,
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                    return;
+                  }
+                  ref.read(settingsProvider.notifier).setDownloadVideo(v);
+                },
+              ),
+            ],
+          ),
+        ] else ...[
+          // Radio buttons for username (single select)
+          Row(
+            children: [
+              SoftRadio<MediaType>(
+                value: MediaType.image,
+                groupValue: settings.mediaType,
+                label: 'Image',
+                compact: true,
+                onChanged: (v) => ref.read(settingsProvider.notifier).setMediaType(v),
+              ),
+              const SizedBox(width: 24),
+              SoftRadio<MediaType>(
+                value: MediaType.video,
+                groupValue: settings.mediaType,
+                label: 'Video',
+                compact: true,
+                onChanged: (v) => ref.read(settingsProvider.notifier).setMediaType(v),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Submit row - only fetches info, does NOT download
+  /// In continue mode, Submit is disabled (uses loaded metadata)
+  Widget _buildSubmitRow(bool isDark, AppJobState jobState, SettingsState settings) {
+    // No longer require outputPath since it's fixed to Downloads/PinDL
+    // In continue mode, disable Submit (we already loaded metadata)
+    final isContinueMode = settings.continueMode && jobState.isContinueMode;
+    final canSubmit = !isContinueMode &&
+        _inputController.text.isNotEmpty &&
+        _inputError == null &&
+        jobState.canSubmit &&
+        !jobState.isExtracting;
+
+    return Row(
+      children: [
+        Expanded(
+          child: SoftButton(
+            label: isContinueMode 
+                ? 'Using saved data' 
+                : (jobState.isExtracting ? 'Loading info...' : 'Submit'),
+            icon: isContinueMode ? Icons.check : (jobState.isExtracting ? null : Icons.search),
+            isLoading: jobState.isExtracting,
+            isDisabled: !canSubmit || isContinueMode,
+            onPressed: canSubmit
+                ? () {
+                    // Add pending history entry
+                    ref.read(historyProvider.notifier).addPending(_inputController.text);
+                    
+                    ref.read(jobProvider.notifier).startExtraction(
+                          input: _inputController.text,
+                          mediaType: settings.mediaType,
+                        );
+                  }
+                : null,
+          ),
+        ),
+        if (jobState.isExtracting) ...[
+          const SizedBox(width: 12),
+          SoftIconButton(
+            icon: Icons.stop,
+            iconColor: AppColors.error,
+            tooltip: 'Stop loading',
+            onPressed: () => _showConfirmDialog(
+              title: 'Stop Loading',
+              message: 'Are you sure you want to cancel loading info?',
+              onConfirm: () => ref.read(jobProvider.notifier).cancelExtraction(),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Result info card - shows extracted metadata
+  /// Displays: username, name, user ID, and total items to download
+  /// For single pin: shows image/video preview with independent border
+  /// For username: shows avatar preview
+  /// In continue mode: shows remaining items and previous stats
+  Widget _buildResultsSection(bool isDark, AppJobState jobState, SettingsState settings) {
+    final isSinglePin = jobState.singlePinResult != null;
+    final singleResult = jobState.singlePinResult;
+    final isUsernameMode = jobState.isUsername && !isSinglePin;
+    final isContinueMode = jobState.isContinueMode;
+    
+    // Calculate total to download based on selected media type
+    int totalToDownload;
+    int remainingToDownload;
+    if (isSinglePin) {
+      // For single pin with multi-select
+      int count = 0;
+      if (settings.downloadImage && (singleResult?.hasImage ?? false)) count++;
+      if (settings.downloadVideo && (singleResult?.hasVideoContent ?? false)) count++;
+      totalToDownload = count;
+      remainingToDownload = count;
+    } else {
+      totalToDownload = settings.mediaType == MediaType.video 
+          ? jobState.totalVideos 
+          : jobState.totalImages;
+      remainingToDownload = settings.mediaType == MediaType.video 
+          ? jobState.remainingVideos 
+          : jobState.remainingImages;
+    }
+    
+    // Check if all items are already downloaded (continue mode with 0 remaining)
+    final allDownloaded = isContinueMode && remainingToDownload == 0;
+    
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: NeumorphismTheme.getSurfaceColor(isDark),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: NeumorphismTheme.getInsetShadows(isDark, intensity: 0.4),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                allDownloaded 
+                    ? Icons.close 
+                    : (isContinueMode ? Icons.refresh : Icons.check_circle_outline),
+                size: 14,
+                color: allDownloaded 
+                    ? AppColors.error 
+                    : (isContinueMode ? AppColors.primary : AppColors.success),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                allDownloaded 
+                    ? 'No items to continue' 
+                    : (isContinueMode ? 'Ready to Continue' : 'Ready to Download'),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: NeumorphismTheme.getSecondaryTextColor(isDark),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          
+          // Avatar preview for username mode
+          if (isUsernameMode && jobState.author?.avatarUrl != null) ...[
+            Center(
+              child: Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+                    width: 3,
+                  ),
+                  boxShadow: NeumorphismTheme.getRaisedShadows(isDark, intensity: 0.5),
+                ),
+                child: ClipOval(
+                  child: Image.network(
+                    jobState.author!.avatarUrl!,
+                    width: 80,
+                    height: 80,
+                    fit: BoxFit.cover,
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) return child;
+                      return Center(
+                        child: CircularProgressIndicator(
+                          value: loadingProgress.expectedTotalBytes != null
+                              ? loadingProgress.cumulativeBytesLoaded /
+                                  loadingProgress.expectedTotalBytes!
+                              : null,
+                          strokeWidth: 2,
+                        ),
+                      );
+                    },
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        color: NeumorphismTheme.getSurfaceColor(isDark),
+                        child: Icon(
+                          Icons.person,
+                          size: 40,
+                          color: NeumorphismTheme.getSecondaryTextColor(isDark),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          
+          // Author info
+          if (jobState.author != null) ...[
+            _buildResultRow(isDark, 'Username', '@${jobState.author!.username}'),
+            _buildResultRow(isDark, 'Name', jobState.author!.name),
+            _buildResultRow(isDark, 'User ID', jobState.author!.userId),
+          ],
+          
+          const Divider(height: 16),
+          
+          // Continue mode: show previous stats
+          if (isContinueMode && isUsernameMode) ...[
+            _buildResultRow(
+              isDark, 
+              'Previous Session',
+              '${jobState.previousDownloaded} downloaded, ${jobState.previousSkipped} skipped, ${jobState.previousFailed} failed',
+            ),
+            if (jobState.wasInterrupted) ...[
+              Container(
+                margin: const EdgeInsets.only(top: 4, bottom: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.warning.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.warning_amber, size: 12, color: AppColors.warning),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Previous session was interrupted',
+                      style: TextStyle(fontSize: 10, color: AppColors.warning),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            const Divider(height: 12),
+          ],
+          
+          // Total/Remaining to download
+          _buildResultRow(
+            isDark, 
+            isContinueMode ? 'Remaining Items' : 'Total to Download', 
+            isSinglePin
+                ? '$totalToDownload item${totalToDownload != 1 ? 's' : ''}'
+                : isContinueMode
+                    ? '$remainingToDownload ${settings.mediaType.name}${remainingToDownload != 1 ? 's' : ''} (of $totalToDownload total)'
+                    : '$totalToDownload ${settings.mediaType.name}${totalToDownload != 1 ? 's' : ''}',
+            highlight: true,
+          ),
+          
+          // Media preview for single pin
+          if (isSinglePin && settings.showPreview && singleResult != null) ...[
+            const SizedBox(height: 12),
+            _buildMediaPreview(isDark, singleResult),
+          ],
+          
+          // Warning messages for single pin
+          if (isSinglePin && singleResult != null) ...[
+            // Warning: Image selected but only video available
+            if (settings.downloadImage && !singleResult.hasImage && singleResult.hasVideoContent) ...[
+              const SizedBox(height: 8),
+              _buildWarningMessage(
+                isDark,
+                'No image available. Thumbnail will be downloaded instead.',
+                Icons.image_not_supported,
+              ),
+            ],
+            // Error: Video selected but no video available
+            if (settings.downloadVideo && !singleResult.hasVideoContent) ...[
+              const SizedBox(height: 8),
+              _buildErrorMessage(
+                isDark,
+                'No video available for this pin.',
+                Icons.videocam_off,
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Build media preview with independent border
+  /// Shows preview based on user selection:
+  /// - Image only: show thumbnail for video, image for image
+  /// - Video only: show video player
+  /// - Both: show both thumbnail and video
+  Widget _buildMediaPreview(bool isDark, dynamic singleResult) {
+    final settings = ref.watch(settingsProvider);
+    final hasVideo = singleResult.hasVideoContent ?? false;
+    final hasImage = singleResult.hasImage ?? false;
+    final thumbnail = singleResult.thumbnail as String?;
+    final imageUrl = singleResult.imageUrl as String?;
+    final videoUrl = singleResult.videoUrl as String?;
+    
+    final showImage = settings.downloadImage;
+    final showVideo = settings.downloadVideo && hasVideo;
+    
+    // Determine what preview(s) to show
+    if (showImage && showVideo) {
+      // Show BOTH thumbnail AND video preview
+      return Column(
+        children: [
+          // Thumbnail/image preview
+          Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+                width: 2,
+              ),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Stack(
+                children: [
+                  _buildImagePreview(thumbnail ?? imageUrl ?? ''),
+                  Positioned(
+                    top: 8,
+                    left: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.7),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.image, color: Colors.white, size: 14),
+                          SizedBox(width: 4),
+                          Text(
+                            'THUMBNAIL',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Video preview
+          Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+                width: 2,
+              ),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: _buildVideoPreview(thumbnail ?? '', videoUrl),
+            ),
+          ),
+        ],
+      );
+    } else if (showVideo && hasVideo) {
+      // Show only video preview
+      return Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+            width: 2,
+          ),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: _buildVideoPreview(thumbnail ?? '', videoUrl),
+        ),
+      );
+    } else if (showImage) {
+      // Show image/thumbnail preview (for video URLs, this shows the thumbnail)
+      final previewUrl = hasVideo ? (thumbnail ?? imageUrl) : imageUrl;
+      if (previewUrl == null) return const SizedBox.shrink();
+      
+      return Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+            width: 2,
+          ),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: Stack(
+            children: [
+              _buildImagePreview(previewUrl),
+              if (hasVideo)
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.7),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.image, color: Colors.white, size: 14),
+                        SizedBox(width: 4),
+                        Text(
+                          'THUMBNAIL',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+    
+    return const SizedBox.shrink();
+  }
+
+  /// Build image preview
+  Widget _buildImagePreview(String imageUrl) {
+    return Image.network(
+      imageUrl,
+      height: 180,
+      width: double.infinity,
+      fit: BoxFit.cover,
+      loadingBuilder: (context, child, loadingProgress) {
+        if (loadingProgress == null) return child;
+        return SizedBox(
+          height: 180,
+          child: Center(
+            child: CircularProgressIndicator(
+              value: loadingProgress.expectedTotalBytes != null
+                  ? loadingProgress.cumulativeBytesLoaded /
+                      loadingProgress.expectedTotalBytes!
+                  : null,
+              strokeWidth: 2,
+            ),
+          ),
+        );
+      },
+      errorBuilder: (context, error, stackTrace) {
+        return SizedBox(
+          height: 180,
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.broken_image, size: 40, color: AppColors.error),
+                const SizedBox(height: 8),
+                Text(
+                  'Failed to load preview',
+                  style: TextStyle(fontSize: 12, color: AppColors.error),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// Build video preview with actual video playback (autoplay, muted, looped)
+  Widget _buildVideoPreview(String thumbnailUrl, String? videoUrl) {
+    // Initialize video controller if we have a video URL
+    if (videoUrl != null && videoUrl.isNotEmpty) {
+      // Use post-frame callback to avoid calling setState during build
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _initVideoController(videoUrl);
+      });
+    }
+    
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        // Show video player if initialized, otherwise show thumbnail
+        if (_isVideoInitialized && _videoController != null)
+          SizedBox(
+            height: 180,
+            width: double.infinity,
+            child: FittedBox(
+              fit: BoxFit.cover,
+              clipBehavior: Clip.hardEdge,
+              child: SizedBox(
+                width: _videoController!.value.size.width,
+                height: _videoController!.value.size.height,
+                child: VideoPlayer(_videoController!),
+              ),
+            ),
+          )
+        else
+          Image.network(
+            thumbnailUrl,
+            height: 180,
+            width: double.infinity,
+            fit: BoxFit.cover,
+            loadingBuilder: (context, child, loadingProgress) {
+              if (loadingProgress == null) return child;
+              return SizedBox(
+                height: 180,
+                child: Center(
+                  child: CircularProgressIndicator(
+                    value: loadingProgress.expectedTotalBytes != null
+                        ? loadingProgress.cumulativeBytesLoaded /
+                            loadingProgress.expectedTotalBytes!
+                        : null,
+                    strokeWidth: 2,
+                  ),
+                ),
+              );
+            },
+            errorBuilder: (context, error, stackTrace) {
+              return SizedBox(
+                height: 180,
+                child: Center(
+                  child: Icon(Icons.videocam_off, size: 40, color: AppColors.error),
+                ),
+              );
+            },
+          ),
+        
+        // Show loading indicator while video is initializing
+        if (videoUrl != null && !_isVideoInitialized)
+          Container(
+            width: 60,
+            height: 60,
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.6),
+              shape: BoxShape.circle,
+            ),
+            child: const Padding(
+              padding: EdgeInsets.all(15),
+              child: CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2,
+              ),
+            ),
+          ),
+        
+        // Video indicator badge
+        Positioned(
+          top: 8,
+          right: 8,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.7),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.videocam, color: Colors.white, size: 14),
+                const SizedBox(width: 4),
+                Text(
+                  _isVideoInitialized ? 'PLAYING' : 'VIDEO',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        
+        // Muted indicator
+        if (_isVideoInitialized)
+          Positioned(
+            bottom: 8,
+            right: 8,
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Icon(Icons.volume_off, color: Colors.white, size: 16),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Build warning message
+  Widget _buildWarningMessage(bool isDark, String message, IconData icon) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 14, color: AppColors.warning),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                fontSize: 11,
+                color: AppColors.warning,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Build error message
+  Widget _buildErrorMessage(bool isDark, String message, IconData icon) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: AppColors.error.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.error.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 14, color: AppColors.error),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                fontSize: 11,
+                color: AppColors.error,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResultRow(bool isDark, String label, String value, {bool highlight = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Text(
+            '$label: ',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: highlight ? FontWeight.w600 : FontWeight.normal,
+              color: NeumorphismTheme.getSecondaryTextColor(isDark),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: highlight ? 14 : 12,
+                fontWeight: highlight ? FontWeight.bold : FontWeight.w500,
+                color: highlight ? AppColors.primary : NeumorphismTheme.getTextColor(isDark),
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Download button section - below the info card
+  /// When pressed: disabled + spinner + "Download" text + stop button appears
+  /// In continue mode: shows "Continue Download" label
+  /// In all-downloaded state: shows "All downloaded" with green checkmark
+  Widget _buildDownloadConfirmation(bool isDark, AppJobState jobState, SettingsState settings) {
+    // outputPath is no longer required - we use a fixed path Downloads/PinDL
+    final canDownload = jobState.canDownload;
+    final isDownloading = jobState.isDownloading;
+    final isCompleted = jobState.status == JobStatus.completed;
+    final isContinueMode = jobState.isContinueMode;
+    
+    // Calculate remaining items for continue mode
+    final remainingToDownload = settings.mediaType == MediaType.video 
+        ? jobState.remainingVideos 
+        : jobState.remainingImages;
+    final allDownloaded = isContinueMode && remainingToDownload == 0;
+    
+    // Use a dummy path - actual path is handled by MediaStore in download_service
+    const outputPath = 'Downloads/PinDL';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: SoftButton(
+                // Show different states based on continue mode
+                label: allDownloaded 
+                    ? 'All downloaded' 
+                    : (isContinueMode ? 'Continue Download' : 'Download'),
+                icon: isDownloading 
+                    ? null 
+                    : (allDownloaded 
+                        ? Icons.check_circle 
+                        : (isContinueMode ? Icons.play_arrow : Icons.download)),
+                accentColor: allDownloaded ? AppColors.success : null,
+                isLoading: isDownloading,
+                isDisabled: allDownloaded || isDownloading || (!canDownload),
+                onPressed: (canDownload && !allDownloaded)
+                    ? () {
+                        ref.read(jobProvider.notifier).startDownload(
+                              outputPath: outputPath,
+                              mediaType: settings.mediaType,
+                              overwrite: settings.overwrite,
+                              downloadImage: settings.downloadImage,
+                              downloadVideo: settings.downloadVideo,
+                              saveMetadata: settings.saveMetadata,
+                            );
+                      }
+                    : null,
+              ),
+            ),
+            // Stop button appears next to download button when downloading
+            AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              child: isDownloading
+                  ? Row(
+                      children: [
+                        const SizedBox(width: 12),
+                        SoftIconButton(
+                          icon: Icons.stop,
+                          iconColor: AppColors.error,
+                          tooltip: 'Stop download',
+                          onPressed: () => _showConfirmDialog(
+                            title: 'Stop Download',
+                            message:
+                                'This will interrupt all downloads. You may be able to resume if metadata is enabled. Continue?',
+                            onConfirm: () => ref.read(jobProvider.notifier).cancelDownload(),
+                          ),
+                        ),
+                      ],
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        ),
+        
+        // Green info message when all items are already downloaded
+        if (allDownloaded) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppColors.success.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppColors.success.withOpacity(0.3)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.info_outline, size: 14, color: AppColors.success),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Nothing to continue. All items have already been downloaded. Run a fresh download with overwrite mode if you want to re-download.',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: AppColors.success,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+
+        // Progress stats (shown during download, after completion, or after interruption)
+        if (isDownloading || isCompleted || jobState.status == JobStatus.cancelled) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: NeumorphismTheme.getSurfaceColor(isDark),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildStatItem(isDark, 'Downloaded', '${jobState.downloadedCount}', AppColors.success),
+                _buildStatItem(isDark, 'Skipped', '${jobState.skippedCount}', AppColors.warning),
+                _buildStatItem(isDark, 'Failed', '${jobState.failedCount}', AppColors.error),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildStatItem(bool isDark, String label, String value, Color color) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            color: NeumorphismTheme.getSecondaryTextColor(isDark),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFooter(bool isDark) {
+    final textColor = NeumorphismTheme.getSecondaryTextColor(isDark);
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            'Built with ',
+            style: TextStyle(
+              fontSize: 12,
+              color: textColor,
+            ),
+          ),
+          const Text('\u{1F375}', style: TextStyle(fontSize: 12)), // Tea emoji
+          Text(
+            ' by ',
+            style: TextStyle(
+              fontSize: 12,
+              color: textColor,
+            ),
+          ),
+          GestureDetector(
+            onTap: () => _launchUrl('https://t.me/dvinchii'),
+            child: Text(
+              'davins',
+              style: TextStyle(
+                fontSize: 12,
+                color: textColor, // Same color as surrounding text
+                decoration: TextDecoration.underline,
+                decorationColor: textColor.withOpacity(0.5),
+              ),
+            ),
+          ),
+          Text(
+            ' | \u00a9 2026',
+            style: TextStyle(
+              fontSize: 12,
+              color: textColor,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Future<void> _launchUrl(String url) async {
+    final uri = Uri.parse(url);
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Could not open: $url'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error opening link: $e'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+}
