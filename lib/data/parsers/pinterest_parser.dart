@@ -5,16 +5,12 @@ import '../models/pin_item.dart';
 import '../models/pinterest_config.dart';
 import '../models/user_pins_result.dart';
 
-/**
-* PORTED from my Node.js CLI tool
-* - https://github.com/motebaya/pinterest-js
-*/
+// PORTED from my Node.js CLI tool
+// - https://github.com/motebaya/pinterest-js
 class PinterestParser {
   PinterestParser._();
   
-  /**
-  * REGEX Patterns
-  */
+  // REGEX Patterns
   static final RegExp _appVersionPattern =
       RegExp(r'''['"]appVersion['"]\s*:\s*['"](\w+?)['"]''');
   static final RegExp _userId1Pattern = RegExp(
