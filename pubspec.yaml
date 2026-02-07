@@ -1,0 +1,84 @@
+name: pindl
+description: "Pinterest Downloader - Personal Use Utility"
+publish_to: 'none'
+version: 1.1.0+2
+
+environment:
+  sdk: ^3.10.8
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # HTTP Client
+  dio: ^5.4.0
+  dio_cookie_manager: ^3.1.1
+  cookie_jar: ^4.0.8
+  
+  # State Management
+  flutter_riverpod: ^2.4.9
+  riverpod_annotation: ^2.3.3
+  
+  # Local Storage (Hive)
+  hive_flutter: ^1.1.0
+  hive: ^2.2.3
+  
+  # File System (SAF via file_picker)
+  path_provider: ^2.1.2
+  path: ^1.8.3
+  file_picker: ^8.0.0
+  permission_handler: ^11.2.0
+  
+  # UI
+  flutter_animate: ^4.5.0
+  shared_preferences: ^2.2.2
+  
+  # Video Player
+  video_player: ^2.8.2
+  
+  # URL Launcher
+  url_launcher: ^6.2.4
+  
+  # Utilities
+  intl: ^0.18.1
+  uuid: ^4.2.2
+  equatable: ^2.0.5
+  
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.8
+  hive_generator: ^2.0.1
+  riverpod_generator: ^2.3.9
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icons/app_icon.png"
+  adaptive_icon_background: "#FAFAFA"
+  adaptive_icon_foreground: "assets/icons/app_icon.png"
+
+flutter:
+  uses-material-design: true
+  
+  assets:
+    - assets/icons/
+    - assets/fonts/
+
+  fonts:
+    - family: PlaypenSans
+      fonts:
+        - asset: assets/fonts/PlaypenSans-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/PlaypenSans-Light.ttf
+          weight: 300
+        - asset: assets/fonts/PlaypenSans-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/PlaypenSans-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/PlaypenSans-Bold.ttf
+          weight: 700
