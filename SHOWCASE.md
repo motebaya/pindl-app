@@ -1,8 +1,4 @@
-# PinDL - Video Showcase
-
-This document provides video demonstrations of PinDL's core features with detailed explanations.
-
----
+# This document provides video demonstrations of PinDL's core features with detailed explanations.
 
 ## 1. Download a Single Image
 
@@ -119,19 +115,19 @@ Downloads/PinDL/
 
 ## 4. History extraction user/URL
 
-<img width="1080" height="2400" alt="extraction_history" src="https://github.com/user-attachments/assets/eb82c9ee-935b-46a1-a7f0-1c02fd67bdc4" />
+<img width="360" height="800" alt="extraction_history" src="https://github.com/user-attachments/assets/eb82c9ee-935b-46a1-a7f0-1c02fd67bdc4" />
 
 - Every extraction action, whether on a username or URL, will be saved in the history tab.
 - Hold down on an item to copy it to the clipboard.
 
 ## 5. Download History
 
-<img width="1080" height="2400" alt="download_history" src="https://github.com/user-attachments/assets/841a4980-69f5-450a-8b58-d5e832023cca" />
+<img width="360" height="800" alt="download_history" src="https://github.com/user-attachments/assets/841a4980-69f5-450a-8b58-d5e832023cca" />
 
 - Every media URL that has entered the download queue will be entered into the download history, whether its status is failed/skipped/successful.
 - Hold down on an item to copy it to the clipboard.
 
-## 4. Interrupt and Continue Downloading
+## 6. Interrupt and Continue Downloading
 
 https://github.com/user-attachments/assets/b53d0c96-c6c9-46fb-bdcb-a8201d41c49a
 
@@ -168,12 +164,6 @@ https://github.com/user-attachments/assets/b53d0c96-c6c9-46fb-bdcb-a8201d41c49a
 2. **Tracks Progress** - Each downloaded/skipped/failed item is recorded
 3. **Filters Remaining** - Only items not yet processed are queued
 4. **Preserves Stats** - Previous session counts shown for reference
-
-### Green Info Message (All Downloaded):
-
-When continue mode is active but all items were already downloaded:
-
-> "Nothing to continue. All items have already been downloaded. Run a fresh download with overwrite mode if you want to re-download."
 
 ---
 

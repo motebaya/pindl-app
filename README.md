@@ -57,7 +57,7 @@ flowchart TD
 ## Features
 
 > [!IMPORTANT]
-> **Feature Explanation & Demo**: [See Here](SHOWCASE.md)
+> **Feature full Explanation & Demo**: [See Here](SHOWCASE.md)
 
 | Feature                              | Status |
 | ------------------------------------ | ------ |
