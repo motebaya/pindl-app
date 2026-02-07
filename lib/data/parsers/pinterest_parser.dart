@@ -5,31 +5,25 @@ import '../models/pin_item.dart';
 import '../models/pinterest_config.dart';
 import '../models/user_pins_result.dart';
 
-/// HTML parser for Pinterest pages
-/// Ported from Node.js Pinterest.js and Helper.js
+/**
+* PORTED from my Node.js CLI tool
+* - https://github.com/motebaya/pinterest-js
+*/
 class PinterestParser {
   PinterestParser._();
-
-  // Regex patterns ported EXACTLY from Node.js Helper.REGEX
-  // JS: /['"]appVersion['"]\:['"](\w+?)['"]/
+  
+  /**
+  * REGEX Patterns
+  */
   static final RegExp _appVersionPattern =
       RegExp(r'''['"]appVersion['"]\s*:\s*['"](\w+?)['"]''');
-
-  // JS: /['"]profile_cover['"]\:\{['"]id['\"]\:['"](\d+?)['\"]/i
   static final RegExp _userId1Pattern = RegExp(
       r'''['"]profile_cover['"]\s*:\s*\{['"]id['"]\s*:\s*['"](\d+?)['"]''',
       caseSensitive: false);
-
-  // JS: /(?<=\/users\/)(\d+)(?=\/pins)/
   static final RegExp _userId2Pattern = RegExp(r'/users/(\d+)/pins');
-
-  // JS: /(?<=\<script\s+[^>]*id\=\"__PWS_INITIAL_PROPS__\"\s+[^>]*type\=\"application\/json\">)(.*?)(?=\<\/script\>)/
   static final RegExp _userId3Pattern = RegExp(
       r'<script\s+[^>]*id="__PWS_INITIAL_PROPS__"\s+[^>]*type="application/json"[^>]*>(.*?)</script>',
       dotAll: true);
-
-  /// Updated mediaData regex pattern from Helper.js
-  /// JS: /window\.__PWS_RELAY_REGISTER_COMPLETED_REQUEST__\(\s*"(?<payload>(?:\\.|[^"\\])*)"\s*,\s*(?<json>\{[\s\S]*?\})\s*\)\s*;?/
   static final RegExp _mediaDataPattern = RegExp(
       r'window\.__PWS_RELAY_REGISTER_COMPLETED_REQUEST__\(\s*"(?<payload>(?:\\.|[^"\\])*)"\s*,\s*(?<json>\{[\s\S]*?\})\s*\)\s*;?');
 
@@ -84,16 +78,13 @@ class PinterestParser {
     return PinterestConfig(appVersion: appVersion, userId: userId);
   }
 
-  /// Parse user pins from API response
-  /// Matches Node.js output format:
-  /// {
-  ///   "status": true,
-  ///   "author": { "username", "name", "userId" },
-  ///   "result": [ { "title", "images", "videos", "pinId", "uploadDate" } ]
-  /// }
-  /// 
-  /// NOTE: Returns null ONLY when status is not success.
-  /// Empty data array with success status is valid (end of pagination).
+  /// Parses the JSON response from the Pinterest user pins API.
+  ///
+  /// [response] is the raw JSON map returned by the Pinterest API.
+  /// [existingAuthor] is an optional [Author] object to be associated with the parsed pins.
+  ///
+  /// Returns a [UserPinsResult] containing the list of pins and pagination data,
+  /// or `null` if the response structure is invalid or missing required fields.
   static UserPinsResult? parseUserPinsResponse(Map<String, dynamic> response, {Author? existingAuthor}) {
     try {
       final resourceResponse =
