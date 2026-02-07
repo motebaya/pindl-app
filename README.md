@@ -22,12 +22,6 @@ PinDL is a Flutter-based Android application that allows users to download publi
 
 The app features a beautiful Neumorphism (Soft UI) design with both light and dark themes.
 
-## Features
-
-- Download by username
-- Download by single pin url
-- [See demo video here](SHOWCASE.md)
-
 ## How It Works
 
 ```mermaid
@@ -61,6 +55,9 @@ flowchart TD
 ```
 
 ## Features
+
+> [!IMPORTANT]
+> **Feature Explanation & Demo**: [See Here](SHOWCASE.md)
 
 | Feature                              | Status |
 | ------------------------------------ | ------ |
