@@ -4,7 +4,7 @@
 
 # PinDL
 
-<small>A personal-use utility app for downloading publicly accessible Pinterest content. Built with Flutter for a modern, responsive mobile experience.</small>
+<small>A personal-use utility app for downloading publicly accessible Pinterest content.</small>
 
 [![dart](https://img.shields.io/badge/Dart-3.10-0175C2?style=flat&logo=dart&logoColor=white)](https://dart.dev/)
 [![flutter](https://img.shields.io/badge/Flutter-3.38-02569B?style=flat&logo=flutter&logoColor=white)](https://flutter.dev/)
