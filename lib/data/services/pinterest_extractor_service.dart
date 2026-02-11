@@ -18,11 +18,11 @@ import '../parsers/pinterest_parser.dart';
 /// Ported from Node.js Pinterest.js
 class PinterestExtractorService {
   final Dio _dio;
-  final bool verbose;
+  bool verbose;
   final CookieJar _cookieJar;
   
-  /// Safety guard: maximum pages to fetch to prevent infinite loops
-  static const int maxPages = 50;
+  /// Default max pages (can be overridden per request)
+  static const int defaultMaxPages = 50;
 
   PinterestConfig? _config;
 
@@ -122,12 +122,17 @@ class PinterestExtractorService {
 
   /// Get user pins with pagination
   /// Ported from Pinterest.getUserPin() - uses iterative loop with proper pagination
+  /// [maxPages] - Maximum pages to fetch (default: 50, max: 100)
   Future<UserPinsResult> getUserPins({
     required String username,
     String? bookmark,
+    int maxPages = defaultMaxPages,
     CancelToken? cancelToken,
-    void Function(int currentCount)? onProgress,
+    void Function(int currentCount, int currentPage, int maxPage)? onProgress,
   }) async {
+    // Clamp maxPages to valid range
+    final effectiveMaxPages = maxPages.clamp(1, 100);
+    
     // Get config if not already fetched
     if (_config == null) {
       await getConfigInfo(username: username, cancelToken: cancelToken);
@@ -141,7 +146,7 @@ class PinterestExtractorService {
     int consecutiveEmptyPages = 0;
 
     // Pagination loop
-    while (currentPage < maxPages) {
+    while (currentPage < effectiveMaxPages) {
       currentPage++;
       
       // Fetch single page
@@ -200,11 +205,11 @@ class PinterestExtractorService {
         }
       }
       
-      // Log: "User pins fetched -> X, page: N" (like Node.js line 207-209)
-      print('[INFO] User pins fetched -> ${allPins.length}, page: $currentPage');
+      // Log: "User pins fetched -> X, page: N/M" (enhanced with max pages)
+      print('[INFO] User pins fetched -> ${allPins.length}, page: $currentPage/$effectiveMaxPages');
       
-      // Notify progress
-      onProgress?.call(allPins.length);
+      // Notify progress with page info
+      onProgress?.call(allPins.length, currentPage, effectiveMaxPages);
       
       // Check bookmark for next page (like Node.js line 219)
       // Node.js: if (page.bookmark !== undefined)
@@ -221,8 +226,8 @@ class PinterestExtractorService {
     }
     
     // Safety guard hit
-    if (currentPage >= maxPages) {
-      print('[WARN] Reached maximum page limit ($maxPages); stopping pagination');
+    if (currentPage >= effectiveMaxPages) {
+      print('[WARN] Reached maximum page limit ($effectiveMaxPages); stopping pagination');
     }
     
     // Must have author to return result
