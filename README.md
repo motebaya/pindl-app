@@ -33,22 +33,37 @@ flowchart TD
     D --> G[Extract Media Info]
     G --> F
 
-    F --> H{Media Type Selection}
+    F --> H{Media Type Filter}
     H -->|Images| I[Queue Image Downloads]
-    H -->|Videos| J[Queue Video Downloads]
+    H -->|Videos| J{Video Format?}
 
-    I --> K[Download via Dio]
-    J --> K
+    J -->|Direct MP4| K[Queue MP4 Downloads]
+    J -->|HLS .m3u8| L{Build Flavor?}
 
-    K --> L[Save to Downloads/PinDL]
-    L --> M[Update MediaStore]
-    M --> N[Save Metadata JSON]
+    L -->|FFmpeg Build| M[Parse HLS Master Playlist]
+    M --> N[Select Best Video+Audio Variant]
+    N --> O["FFmpeg Demux/Remux (stream-copy)"]
+    O --> P[Output MP4]
 
-    N --> O{Interrupted?}
-    O -->|Yes| P[Save Resume Stats]
-    O -->|No| Q[Complete]
+    L -->|Lite Build| Q[Re-fetch Pin as Single URL]
+    Q --> R{Direct MP4 Found?}
+    R -->|Yes| S[Download Direct MP4]
+    R -->|No| T[Skip / Error]
 
-    P --> R[Continue Mode Available]
+    I --> U[Download via Dio]
+    K --> U
+    S --> U
+
+    U --> V[Save to Downloads/PinDL]
+    P --> V
+    V --> W[Update MediaStore]
+    W --> X[Save Metadata JSON]
+
+    X --> Y{Interrupted?}
+    Y -->|Yes| Z[Save Resume Stats]
+    Y -->|No| AA[Complete]
+
+    Z --> AB[Continue Mode Available]
 ```
 
 ## Features
@@ -63,6 +78,8 @@ flowchart TD
 | Download single pins via pin ID      | ✅     |
 | Image download support               | ✅     |
 | Video download support (720p)        | ✅     |
+| HLS video conversion (FFmpeg build)  | ✅     |
+| HLS fallback extraction (Lite build) | ✅     |
 | Batch/bulk downloads                 | ✅     |
 | Resume interrupted downloads         | ✅     |
 | Metadata saving (JSON)               | ✅     |
