@@ -11,6 +11,13 @@
 -keep class kotlin.** { *; }
 -keep class kotlin.Metadata { *; }
 
+# Keep FFmpegKit JNI classes — R8 must NOT rename/strip these because
+# the native .so libraries use JNI RegisterNatives with hardcoded class/method names.
+# Both package names are kept: the fork (antonkarpenko) and original (arthenica),
+# since the native .so may use either package path for JNI symbols.
+-keep class com.antonkarpenko.ffmpegkit.** { *; }
+-keep class com.arthenica.ffmpegkit.** { *; }
+
 # Keep Video Player
 -keep class com.google.android.exoplayer2.** { *; }
 
