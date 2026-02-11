@@ -18,6 +18,9 @@ class SettingsState {
   
   // Continue mode for resuming interrupted downloads
   final bool continueMode;
+  
+  // Max pages for username fetching (1-100, default 50)
+  final int maxPages;
 
   const SettingsState({
     this.saveMetadata = false,
@@ -28,6 +31,7 @@ class SettingsState {
     this.downloadVideo = false,
     this.showPreview = true,
     this.continueMode = false,
+    this.maxPages = 50,
   });
 
   SettingsState copyWith({
@@ -39,6 +43,7 @@ class SettingsState {
     bool? downloadVideo,
     bool? showPreview,
     bool? continueMode,
+    int? maxPages,
   }) {
     return SettingsState(
       saveMetadata: saveMetadata ?? this.saveMetadata,
@@ -49,6 +54,7 @@ class SettingsState {
       downloadVideo: downloadVideo ?? this.downloadVideo,
       showPreview: showPreview ?? this.showPreview,
       continueMode: continueMode ?? this.continueMode,
+      maxPages: maxPages ?? this.maxPages,
     );
   }
 }
@@ -63,6 +69,7 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
   static const _downloadVideoKey = 'download_video';
   static const _showPreviewKey = 'show_preview';
   static const _continueModeKey = 'continue_mode';
+  static const _maxPagesKey = 'max_pages';
 
   final SharedPreferences? _prefs;
 
@@ -83,6 +90,7 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
       downloadVideo: prefs.getBool(_downloadVideoKey) ?? false,
       showPreview: prefs.getBool(_showPreviewKey) ?? true,
       continueMode: prefs.getBool(_continueModeKey) ?? false,
+      maxPages: prefs.getInt(_maxPagesKey) ?? 50,
     );
   }
 
@@ -124,6 +132,13 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
   void setContinueMode(bool value) {
     state = state.copyWith(continueMode: value);
     _prefs?.setBool(_continueModeKey, value);
+  }
+
+  void setMaxPages(int value) {
+    // Clamp to valid range
+    final clamped = value.clamp(1, 100);
+    state = state.copyWith(maxPages: clamped);
+    _prefs?.setInt(_maxPagesKey, clamped);
   }
 }
 
