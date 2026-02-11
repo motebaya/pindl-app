@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/config/build_config.dart';
 import '../../core/exceptions/pinterest_exception.dart';
 import '../../core/utils/pin_url_validator.dart';
 import '../../data/models/author.dart';
@@ -12,11 +13,12 @@ import '../../data/models/media_result.dart';
 import '../../data/models/pin_item.dart';
 import '../../data/models/user_pins_result.dart';
 import '../../data/services/download_service.dart';
+import '../../data/services/hls_converter.dart';
+import '../../data/services/hls_service.dart';
 import '../../data/services/log_service.dart';
 import '../../data/services/pinterest_extractor_service.dart';
 import 'history_provider.dart';
 import 'log_provider.dart';
-import 'settings_provider.dart';
 
 /// App job state for the new submit->info->download flow
 /// Phase A: idle
@@ -158,11 +160,6 @@ class AppJobState {
   AppJobState reset() {
     return const AppJobState();
   }
-  
-  /// Clear results but keep idle state
-  AppJobState clearResults() {
-    return const AppJobState(status: JobStatus.idle);
-  }
 }
 
 /// Job notifier for managing extraction and download state
@@ -171,6 +168,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
   final LogService _logService;
   final PinterestExtractorService _extractor;
   final DownloadService _downloadService;
+  final HlsService? _hlsService;
+  final HlsConverter? _hlsConverter;
   final void Function({
     required String filename,
     required String url,
@@ -188,6 +187,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
     required LogService logService,
     required PinterestExtractorService extractor,
     required DownloadService downloadService,
+    HlsService? hlsService,
+    HlsConverter? hlsConverter,
     void Function({
       required String filename,
       required String url,
@@ -197,15 +198,26 @@ class JobNotifier extends StateNotifier<AppJobState> {
   })  : _logService = logService,
         _extractor = extractor,
         _downloadService = downloadService,
+        // Only instantiate HLS services when FFmpeg is enabled (compile-time const).
+        // Tree-shaking eliminates HlsService/HlsConverter from lite AOT binaries.
+        _hlsService = BuildConfig.enableFfmpeg ? (hlsService ?? HlsService()) : null,
+        _hlsConverter = BuildConfig.enableFfmpeg ? (hlsConverter ?? HlsConverter()) : null,
         _onDownloadComplete = onDownloadComplete,
         super(const AppJobState());
 
   /// Start info extraction (Submit button) - Phase B
   /// This only fetches metadata, does NOT start downloading
+  /// If saveMetadata is true, saves metadata immediately after parsing
   Future<void> startExtraction({
     required String input,
     required MediaType mediaType,
+    bool saveMetadata = false,
+    int maxPages = 50,
+    bool verbose = false,
   }) async {
+    // Update the extractor's verbose flag with the latest setting
+    _extractor.verbose = verbose;
+    
     // Validate we can start extraction
     if (state.isExtracting || state.isDownloading) {
       _logService.error('Cannot start extraction: another operation in progress');
@@ -236,7 +248,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
 
     try {
       if (isUsername) {
-        await _extractUserPins(input, mediaType);
+        await _extractUserPins(input, mediaType, saveMetadata: saveMetadata, maxPages: maxPages);
       } else {
         await _extractSinglePin(input, mediaType);
       }
@@ -254,7 +266,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
     }
   }
 
-  Future<void> _extractUserPins(String username, MediaType mediaType) async {
+  Future<void> _extractUserPins(String username, MediaType mediaType, {bool saveMetadata = false, int maxPages = 50}) async {
     final normalizedUsername = PinUrlValidator.normalizeUsername(username);
     
     _logService.config('Getting config for @$normalizedUsername');
@@ -267,13 +279,14 @@ class JobNotifier extends StateNotifier<AppJobState> {
     _logService.config('App version: ${config.appVersion}');
     _logService.config('User ID: ${config.userId}');
     
-    _logService.fetch('Fetching pins for @$normalizedUsername');
+    _logService.fetch('Fetching pins for @$normalizedUsername (max $maxPages pages)');
     
     final result = await _extractor.getUserPins(
       username: normalizedUsername,
+      maxPages: maxPages,
       cancelToken: _extractCancelToken,
-      onProgress: (count) {
-        _logService.fetch('Fetched $count pins so far...');
+      onProgress: (count, currentPage, maxPage) {
+        _logService.fetch('Fetched $count pins (page $currentPage/$maxPage)...');
       },
     );
     
@@ -288,6 +301,27 @@ class JobNotifier extends StateNotifier<AppJobState> {
       totalImages: result.totalImages,
       totalVideos: result.totalVideos,
     );
+    
+    // REVISION 1: Save metadata immediately after parsing (before download)
+    if (saveMetadata && result.author != null) {
+      final baseFolder = 'PinDL/@$normalizedUsername';
+      final metadataJson = {
+        'author': result.author.toJson(),
+        'pins': result.pins.map((p) => p.toJson()).toList(),
+        'totalImages': result.totalImages,
+        'totalVideos': result.totalVideos,
+        'success_downloaded': 0,
+        'skip_downloaded': 0,
+        'failed_downloaded': 0,
+        'last_index_downloaded': -1,
+        'was_interrupted': false,
+        'status': 'parsed', // Mark as parsed but not downloaded yet
+        'media_type': mediaType.name,
+        'saved_at': DateTime.now().toIso8601String(),
+      };
+      await _saveMetadata(baseFolder, '${result.author.userId}.json', metadataJson);
+      _logService.saved('Metadata saved for @${result.author.username}');
+    }
     
     _logService.complete('Info loaded for @${result.author.username}. Ready to download.');
   }
@@ -358,11 +392,13 @@ class JobNotifier extends StateNotifier<AppJobState> {
       
       if (files.isEmpty) {
         _logService.error('No metadata found for @$normalizedUsername');
+        _logService.error('Make sure metadata file exists in: Download/$baseFolder/<userId>.json');
         return false;
       }
       
       // Get the first json file (should be userId.json)
       final metadataFilename = files.first;
+      _logService.fetch('Found metadata file: $metadataFilename');
       
       // Read the metadata content
       final content = await _downloadService.readTextFromDownloads(metadataFilename, baseFolder);
@@ -642,17 +678,21 @@ class JobNotifier extends StateNotifier<AppJobState> {
     // - (Note: current UI only allows single selection for username mode)
     
     // Aggregate all URLs to download
-    final List<({String pinId, String title, String url, bool isVideo, String subFolder})> downloadItems = [];
+    // Added isHls flag for HLS video conversion support
+    final List<({String pinId, String title, String url, bool isVideo, bool isHls, String subFolder})> downloadItems = [];
     
     for (final pin in pins) {
       if (isVideoOnly) {
         // Video mode: only download video URLs
         if (pin.hasVideo && pin.videoUrl?.url != null) {
+          // Check if this is an HLS video that needs conversion
+          final isHls = pin.videoUrl!.isHls;
           downloadItems.add((
             pinId: pin.pinId,
             title: pin.title,
             url: pin.videoUrl!.url,
             isVideo: true,
+            isHls: isHls,
             subFolder: videosFolder,
           ));
         }
@@ -664,6 +704,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
             title: pin.title,
             url: pin.imageUrl!,
             isVideo: false,
+            isHls: false,
             subFolder: imagesFolder,
           ));
         } else if (pin.hasVideo && pin.thumbnail != null) {
@@ -673,6 +714,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
             title: pin.title,
             url: pin.thumbnail!,
             isVideo: false,
+            isHls: false,
             subFolder: imagesFolder,
           ));
         }
@@ -706,15 +748,24 @@ class JobNotifier extends StateNotifier<AppJobState> {
     // Filter items to download (skip already completed ones)
     final itemsToDownload = downloadItems.sublist(startIndex);
     
-    // Log aggregation stats
+    // Log aggregation stats (including HLS count)
     final videoCount = itemsToDownload.where((i) => i.isVideo).length;
+    final hlsCount = itemsToDownload.where((i) => i.isHls).length;
+    final mp4Count = videoCount - hlsCount;
     final imageCount = itemsToDownload.where((i) => !i.isVideo).length;
     
     if (state.isContinueMode) {
       _logService.queue('Continue mode: skipping first $startIndex items');
-      _logService.queue('Remaining to download: $imageCount images, $videoCount videos, total ${itemsToDownload.length} items');
+      _logService.queue('Remaining to download: $imageCount images, $videoCount videos (${mp4Count} MP4, $hlsCount HLS), total ${itemsToDownload.length} items');
     } else {
-      _logService.queue('To be downloaded: $imageCount images, $videoCount videos, total ${itemsToDownload.length} items');
+      _logService.queue('To be downloaded: $imageCount images, $videoCount videos (${mp4Count} MP4, $hlsCount HLS)');
+    }
+    if (hlsCount > 0) {
+      if (BuildConfig.enableFfmpeg) {
+        _logService.queue('HLS videos will be converted to MP4 using FFmpeg');
+      } else {
+        _logService.queue('Lite mode: HLS videos will be fetched via single-pin extraction');
+      }
     }
     _logService.queue('Output: Downloads/$baseFolder');
     
@@ -724,9 +775,13 @@ class JobNotifier extends StateNotifier<AppJobState> {
     // Track last completed index for resume (continue from previous lastIndex)
     int lastCompletedIndex = state.isContinueMode ? state.lastIndexDownloaded : -1;
     
-    // Add to download queue (use itemsToDownload which skips already done items)
-    for (var i = 0; i < itemsToDownload.length; i++) {
-      final item = itemsToDownload[i];
+    // Separate HLS items (need special processing) from regular items
+    final hlsItems = itemsToDownload.where((i) => i.isHls).toList();
+    final regularItems = itemsToDownload.where((i) => !i.isHls).toList();
+    
+    // Add regular items to download queue
+    for (var i = 0; i < regularItems.length; i++) {
+      final item = regularItems[i];
       final filename = item.url.split('/').last;
       pinUrlMap[item.pinId] = (item.url, filename);
       
@@ -742,67 +797,237 @@ class JobNotifier extends StateNotifier<AppJobState> {
       );
     }
     
-    // Process queue
-    await _downloadService.processQueue(
-      overwrite: overwrite,
-      subFolder: isVideoOnly ? videosFolder : imagesFolder,
-      onCompleted: (pinId) {
-        _logService.saved('Saved: $pinId');
-        // Update lastCompletedIndex with actual position in downloadItems
-        lastCompletedIndex = startIndex + state.currentIndex;
-        state = state.copyWith(
-          downloadedCount: state.downloadedCount + 1,
-          currentIndex: state.currentIndex + 1,
-        );
-        
-        // Record to download history
-        final info = pinUrlMap[pinId];
-        if (info != null) {
-          _onDownloadComplete?.call(
-            filename: info.$2,
-            url: info.$1,
-            status: HistoryStatus.success,
+    // Process regular queue first
+    if (regularItems.isNotEmpty) {
+      await _downloadService.processQueue(
+        overwrite: overwrite,
+        subFolder: isVideoOnly ? videosFolder : imagesFolder,
+        onCompleted: (pinId) {
+          _logService.saved('Saved: $pinId');
+          lastCompletedIndex = startIndex + state.currentIndex;
+          state = state.copyWith(
+            downloadedCount: state.downloadedCount + 1,
+            currentIndex: state.currentIndex + 1,
           );
-        }
-      },
-      onSkipped: (pinId, reason) {
-        _logService.skipped('Skipped $pinId: $reason');
-        lastCompletedIndex = startIndex + state.currentIndex;
-        state = state.copyWith(
-          skippedCount: state.skippedCount + 1,
-          currentIndex: state.currentIndex + 1,
-        );
-        
-        // Record to download history
-        final info = pinUrlMap[pinId];
-        if (info != null) {
-          _onDownloadComplete?.call(
-            filename: info.$2,
-            url: info.$1,
-            status: HistoryStatus.skipped,
+          
+          final info = pinUrlMap[pinId];
+          if (info != null) {
+            _onDownloadComplete?.call(
+              filename: info.$2,
+              url: info.$1,
+              status: HistoryStatus.success,
+            );
+          }
+        },
+        onSkipped: (pinId, reason) {
+          _logService.skipped('Skipped $pinId: $reason');
+          lastCompletedIndex = startIndex + state.currentIndex;
+          state = state.copyWith(
+            skippedCount: state.skippedCount + 1,
+            currentIndex: state.currentIndex + 1,
           );
-        }
-      },
-      onFailed: (pinId, error) {
-        _logService.error('Failed $pinId: $error');
-        lastCompletedIndex = startIndex + state.currentIndex;
-        state = state.copyWith(
-          failedCount: state.failedCount + 1,
-          currentIndex: state.currentIndex + 1,
-        );
+        },
+        onFailed: (pinId, error) {
+          _logService.error('Failed $pinId: $error');
+          lastCompletedIndex = startIndex + state.currentIndex;
+          state = state.copyWith(
+            failedCount: state.failedCount + 1,
+            currentIndex: state.currentIndex + 1,
+          );
+          
+          final info = pinUrlMap[pinId];
+          if (info != null) {
+            _onDownloadComplete?.call(
+              filename: info.$2,
+              url: info.$1,
+              status: HistoryStatus.failed,
+              errorMessage: error,
+            );
+          }
+        },
+      );
+    }
+    
+    // Process HLS items — strategy depends on build flavor
+    if (BuildConfig.enableFfmpeg && _hlsService != null && _hlsConverter != null) {
+      // ── FFmpeg build: HLS parsing + FFmpeg conversion ──
+      for (var i = 0; i < hlsItems.length; i++) {
+        if (_downloadCancelToken?.isCancelled ?? false) break;
         
-        // Record to download history
-        final info = pinUrlMap[pinId];
-        if (info != null) {
+        final item = hlsItems[i];
+        final outputFilename = '${item.pinId}.mp4';  // HLS -> MP4
+        pinUrlMap[item.pinId] = (item.url, outputFilename);
+        
+        _logService.downloading('HLS video: Fetching playlist for ${item.pinId}...');
+        
+        try {
+          // Step 1: Check if output file already exists (skip if overwrite is false)
+          if (!overwrite) {
+            final exists = await _downloadService.fileExistsInDownloads(outputFilename, videosFolder);
+            if (exists) {
+              _logService.skipped('Skipped ${item.pinId}: File exists');
+              lastCompletedIndex = startIndex + regularItems.length + i;
+              state = state.copyWith(
+                skippedCount: state.skippedCount + 1,
+                currentIndex: state.currentIndex + 1,
+              );
+              continue;
+            }
+          }
+          
+          // Step 2: Fetch and parse HLS master playlist
+          final hlsResult = await _hlsService.fetchAndParse(item.url);
+          
+          if (!hlsResult.success) {
+            throw Exception('HLS parse failed: ${hlsResult.errorMessage}');
+          }
+          
+          _logService.parse('HLS variant: ${hlsResult.width}x${hlsResult.height} @ ${hlsResult.bandwidth ?? 0} bps');
+          
+          // Step 3: Convert HLS to MP4 using FFmpeg
+          _logService.downloading('Converting HLS -> MP4...');
+          
+          final conversionResult = await _hlsConverter.convertToMp4(
+            videoM3u8Url: hlsResult.videoVariantUrl!,
+            audioM3u8Url: hlsResult.audioUrl,
+            outputFilename: outputFilename,
+            onLog: (log) {
+              // Only log important messages (not every frame)
+              if (log.contains('frame=') && log.contains('fps=')) {
+                // Skip verbose frame logs
+              } else if (log.isNotEmpty) {
+                print('[FFmpeg] $log');
+              }
+            },
+          );
+          
+          if (!conversionResult.success) {
+            throw Exception('FFmpeg conversion failed: ${conversionResult.errorMessage}');
+          }
+          
+          // Step 4: Move converted MP4 to public Downloads
+          final savedPath = await _downloadService.saveFileToDownloads(
+            conversionResult.outputPath!,
+            outputFilename,
+            videosFolder,
+            overwrite: overwrite,
+          );
+          
+          if (savedPath != null) {
+            _logService.saved('Saved: $outputFilename');
+            lastCompletedIndex = startIndex + regularItems.length + i;
+            state = state.copyWith(
+              downloadedCount: state.downloadedCount + 1,
+              currentIndex: state.currentIndex + 1,
+            );
+            
+            _onDownloadComplete?.call(
+              filename: outputFilename,
+              url: item.url,
+              status: HistoryStatus.success,
+            );
+          } else {
+            throw Exception('Failed to save converted file to Downloads');
+          }
+        } catch (e) {
+          _logService.error('HLS failed ${item.pinId}: $e');
+          lastCompletedIndex = startIndex + regularItems.length + i;
+          state = state.copyWith(
+            failedCount: state.failedCount + 1,
+            currentIndex: state.currentIndex + 1,
+          );
+          
           _onDownloadComplete?.call(
-            filename: info.$2,
-            url: info.$1,
+            filename: outputFilename,
+            url: item.url,
             status: HistoryStatus.failed,
-            errorMessage: error,
+            errorMessage: e.toString(),
           );
         }
-      },
-    );
+      }
+    } else {
+      // ── Lite build: fallback to single-pin extraction for direct MP4 ──
+      for (var i = 0; i < hlsItems.length; i++) {
+        if (_downloadCancelToken?.isCancelled ?? false) break;
+        
+        final item = hlsItems[i];
+        final outputFilename = '${item.pinId}.mp4';
+        pinUrlMap[item.pinId] = (item.url, outputFilename);
+        
+        _logService.downloading('Lite mode: fetching direct video for ${item.pinId}...');
+        
+        try {
+          // Step 1: Check if output file already exists (skip if overwrite is false)
+          if (!overwrite) {
+            final exists = await _downloadService.fileExistsInDownloads(outputFilename, videosFolder);
+            if (exists) {
+              _logService.skipped('Skipped ${item.pinId}: File exists');
+              lastCompletedIndex = startIndex + regularItems.length + i;
+              state = state.copyWith(
+                skippedCount: state.skippedCount + 1,
+                currentIndex: state.currentIndex + 1,
+              );
+              continue;
+            }
+          }
+          
+          // Step 2: Use single-pin extraction to attempt direct MP4 retrieval
+          // Construct pin URL from pinId and call getPinVideo -> parseVideoData
+          final pinUrl = 'https://www.pinterest.com/pin/${item.pinId}/';
+          final mediaResult = await _extractor.getPinVideo(
+            pinIdOrUrl: pinUrl,
+            cancelToken: _downloadCancelToken,
+          );
+          
+          if (mediaResult.videoUrl != null) {
+            // Direct MP4 found — download it normally
+            final videoFilename = mediaResult.videoUrl!.split('/').last;
+            final finalFilename = videoFilename.endsWith('.mp4') ? videoFilename : outputFilename;
+            
+            await _downloadService.downloadFile(
+              url: mediaResult.videoUrl!,
+              outputPath: outputPath,
+              filename: finalFilename,
+              pinId: item.pinId,
+              overwrite: overwrite,
+              subFolder: videosFolder,
+            );
+            
+            _logService.saved('Saved: $finalFilename');
+            lastCompletedIndex = startIndex + regularItems.length + i;
+            state = state.copyWith(
+              downloadedCount: state.downloadedCount + 1,
+              currentIndex: state.currentIndex + 1,
+            );
+            
+            _onDownloadComplete?.call(
+              filename: finalFilename,
+              url: mediaResult.videoUrl!,
+              status: HistoryStatus.success,
+            );
+          } else {
+            // No direct video URL available from single-pin extraction
+            throw Exception(
+              'Failed to fetch direct video URL. Please use the FFmpeg build to download this video.',
+            );
+          }
+        } catch (e) {
+          _logService.error('Failed ${item.pinId}: $e');
+          lastCompletedIndex = startIndex + regularItems.length + i;
+          state = state.copyWith(
+            failedCount: state.failedCount + 1,
+            currentIndex: state.currentIndex + 1,
+          );
+          
+          _onDownloadComplete?.call(
+            filename: outputFilename,
+            url: item.url,
+            status: HistoryStatus.failed,
+            errorMessage: e.toString(),
+          );
+        }
+      }
+    }
     
     // Check if download was cancelled/interrupted - save resume stats
     final wasInterrupted = state.status == JobStatus.cancelled;
@@ -864,9 +1089,12 @@ class JobNotifier extends StateNotifier<AppJobState> {
 }
 
 /// Provider for Pinterest extractor service
+/// Created once and never invalidated by settings changes.
+/// The verbose flag is updated directly on the service instance by JobNotifier
+/// before each extraction, avoiding the Riverpod invalidation cascade that
+/// previously caused jobProvider to reset (destroying the result card).
 final pinterestExtractorProvider = Provider<PinterestExtractorService>((ref) {
-  final settings = ref.watch(settingsProvider);
-  final service = PinterestExtractorService(verbose: settings.verbose);
+  final service = PinterestExtractorService();
   ref.onDispose(() => service.dispose());
   return service;
 });
