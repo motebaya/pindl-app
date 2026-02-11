@@ -12,38 +12,86 @@ import 'presentation/providers/theme_provider.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Hive
-  await Hive.initFlutter();
+  try {
+    // Initialize Hive (uses path_provider platform channel)
+    await Hive.initFlutter();
 
-  // Initialize SharedPreferences
-  final prefs = await SharedPreferences.getInstance();
+    // Initialize SharedPreferences (uses platform channel)
+    final prefs = await SharedPreferences.getInstance();
 
-  // Set preferred orientations
-  await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
-  ]);
+    // Set preferred orientations
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
 
-  // Set system UI overlay style
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.dark,
-    systemNavigationBarColor: Colors.transparent,
-    systemNavigationBarIconBrightness: Brightness.dark,
-  ));
+    // Set system UI overlay style
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarIconBrightness: Brightness.dark,
+    ));
 
-  runApp(
-    ProviderScope(
-      overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
-        themeProvider.overrideWith((ref) => ThemeNotifier(prefs)),
-        settingsProvider.overrideWith((ref) => SettingsNotifier(prefs)),
-        historyProvider.overrideWith((ref) => HistoryNotifier(prefs)),
-        downloadHistoryProvider.overrideWith((ref) => DownloadHistoryNotifier(prefs)),
-      ],
-      child: const PinDLApp(),
-    ),
-  );
+    runApp(
+      ProviderScope(
+        overrides: [
+          sharedPreferencesProvider.overrideWithValue(prefs),
+          themeProvider.overrideWith((ref) => ThemeNotifier(prefs)),
+          settingsProvider.overrideWith((ref) => SettingsNotifier(prefs)),
+          historyProvider.overrideWith((ref) => HistoryNotifier(prefs)),
+          downloadHistoryProvider
+              .overrideWith((ref) => DownloadHistoryNotifier(prefs)),
+        ],
+        child: const PinDLApp(),
+      ),
+    );
+  } catch (e, stackTrace) {
+    // If plugin registration failed (e.g., FFmpegKit crash killing all channels),
+    // Hive.initFlutter() or SharedPreferences.getInstance() will throw a
+    // PlatformException. Without this catch, the app stays on the splash screen
+    // forever because main() never reaches runApp().
+    debugPrint('Fatal error during app initialization: $e');
+    debugPrint('$stackTrace');
+    runApp(
+      MaterialApp(
+        home: Scaffold(
+          backgroundColor: const Color(0xFFFAFAFA),
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.error_outline, size: 64, color: Colors.red),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Failed to initialize PinDL',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '$e',
+                    style: const TextStyle(fontSize: 13, color: Colors.black54),
+                    textAlign: TextAlign.center,
+                    maxLines: 6,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Please restart the app or reinstall.',
+                    style: TextStyle(fontSize: 14),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Main app widget
