@@ -29,12 +29,32 @@ android {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
+    // Required for AGP 8.x — BuildConfig generation is disabled by default.
+    // We use BuildConfig.FLAVOR in MainActivity to conditionally register FFmpegKit.
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId = "com.motebaya.pindl"
-        minSdk = flutter.minSdkVersion
+        minSdk = 24  // Required for FFmpegKit (HLS conversion support)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+    }
+
+    flavorDimensions += "mode"
+    productFlavors {
+        create("lite") {
+            dimension = "mode"
+            applicationIdSuffix = ".lite"
+            versionNameSuffix = "-lite"
+        }
+        create("ffmpeg") {
+            dimension = "mode"
+            applicationIdSuffix = ".ffmpeg"
+            versionNameSuffix = "-ffmpeg"
+        }
     }
 
     signingConfigs {
@@ -67,4 +87,33 @@ android {
 
 flutter {
     source = "../.."
+}
+
+// Exclude FFmpeg native libraries from the lite flavor to reduce APK size.
+// The Dart code is already guarded by BuildConfig.enableFfmpeg (defaults to false),
+// so HlsConverter is never instantiated in lite builds — no runtime crash.
+androidComponents {
+    onVariants(selector().withFlavor("mode" to "lite")) { variant ->
+        variant.packaging.jniLibs.excludes.addAll(listOf(
+            // Standard names (arm64-v8a, x86_64)
+            "**/libavcodec.so",
+            "**/libavdevice.so",
+            "**/libavfilter.so",
+            "**/libavformat.so",
+            "**/libavutil.so",
+            "**/libffmpegkit.so",
+            "**/libffmpegkit_abidetect.so",
+            "**/libswresample.so",
+            "**/libswscale.so",
+            // NEON-suffixed names (armeabi-v7a)
+            "**/libavcodec_neon.so",
+            "**/libavdevice_neon.so",
+            "**/libavfilter_neon.so",
+            "**/libavformat_neon.so",
+            "**/libavutil_neon.so",
+            "**/libffmpegkit_armv7a_neon.so",
+            "**/libswresample_neon.so",
+            "**/libswscale_neon.so",
+        ))
+    }
 }
