@@ -1,7 +1,7 @@
 name: pindl
 description: "Pinterest Downloader - Personal Use Utility"
 publish_to: 'none'
-version: 1.1.0+2
+version: 2.0.0+5
 
 environment:
   sdk: ^3.10.8
@@ -43,6 +43,9 @@ dependencies:
   intl: ^0.18.1
   uuid: ^4.2.2
   equatable: ^2.0.5
+  
+  # HLS Video Support
+  ffmpeg_kit_flutter_new_https: ^2.1.0  # FFmpeg for HLS->MP4 conversion (community fork)
   
   cupertino_icons: ^1.0.8
 
