@@ -1,4 +1,6 @@
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemNavigator;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
@@ -31,7 +33,7 @@ class HomePage extends ConsumerStatefulWidget {
   ConsumerState<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends ConsumerState<HomePage> {
+class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver {
   final _inputController = TextEditingController();
   String? _inputError;
   String? _inputType;
@@ -41,13 +43,137 @@ class _HomePageState extends ConsumerState<HomePage> {
   String? _currentVideoUrl;
   bool _isVideoInitialized = false;
 
+  // Storage permission state
+  bool _hasStoragePermission = true;
+  bool _isPermissionDialogShowing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Check storage permission after first frame renders
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkStoragePermission();
+    });
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _inputController.dispose();
     _disposeVideoController();
     super.dispose();
   }
-  
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _recheckStoragePermission();
+    }
+  }
+
+  // ── Storage permission management ──
+
+  Future<void> _checkStoragePermission() async {
+    if (!Platform.isAndroid) return;
+
+    final hasPermission =
+        await ref.read(downloadServiceProvider).hasManageStoragePermission();
+    if (!hasPermission && mounted) {
+      setState(() => _hasStoragePermission = false);
+      _showStoragePermissionDialog();
+    }
+  }
+
+  Future<void> _recheckStoragePermission() async {
+    if (!Platform.isAndroid || _hasStoragePermission) return;
+
+    final hasPermission =
+        await ref.read(downloadServiceProvider).hasManageStoragePermission();
+    if (hasPermission && mounted) {
+      setState(() => _hasStoragePermission = true);
+      if (_isPermissionDialogShowing) {
+        Navigator.of(context).pop();
+        _isPermissionDialogShowing = false;
+      }
+    }
+  }
+
+  void _showStoragePermissionDialog() {
+    _isPermissionDialogShowing = true;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        final isDark = Theme.of(dialogContext).brightness == Brightness.dark;
+        return PopScope(
+          canPop: false,
+          child: AlertDialog(
+            backgroundColor: NeumorphismTheme.getCardColor(isDark),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(
+                NeumorphismTheme.defaultBorderRadius,
+              ),
+            ),
+            title: Row(
+              children: [
+                Icon(Icons.folder_open, color: AppColors.warning),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Storage Permission Required',
+                    style: TextStyle(
+                      color: NeumorphismTheme.getTextColor(isDark),
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: Text(
+              'On Android 10+, storage access is strictly restricted.\n\n'
+              'To save and load metadata, the app needs permission to '
+              'read public output folders at:\n\n'
+              'Download/PinDL/*\n\n'
+              'Please tap "Allow" and enable "All files access" in '
+              'system settings.',
+              style: TextStyle(
+                color: NeumorphismTheme.getSecondaryTextColor(isDark),
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+            actionsAlignment: MainAxisAlignment.spaceBetween,
+            actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            actions: [
+              SoftButton(
+                label: 'Exit',
+                icon: Icons.exit_to_app,
+                accentColor: AppColors.error,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 10),
+                onPressed: () => SystemNavigator.pop(),
+              ),
+              SoftButton(
+                label: 'Allow',
+                icon: Icons.check,
+                accentColor: AppColors.success,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 10),
+                onPressed: () {
+                  ref
+                      .read(downloadServiceProvider)
+                      .requestManageStoragePermission();
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   void _disposeVideoController() {
     _videoController?.dispose();
     _videoController = null;
@@ -211,15 +337,15 @@ class _HomePageState extends ConsumerState<HomePage> {
       onTap: () => FocusScope.of(context).unfocus(),
       child: Scaffold(
         backgroundColor: NeumorphismTheme.getBackgroundColor(isDark),
-        // Prevent footer from moving up when keyboard appears
-        resizeToAvoidBottomInset: false,
+        // REVISION 5: Allow page to scroll when keyboard appears
+        resizeToAvoidBottomInset: true,
         body: SafeArea(
           child: Column(
             children: [
               // Top bar
               _buildTopBar(isDark, themeMode),
 
-              // Main content
+              // Main content - scrollable
               Expanded(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
@@ -247,6 +373,12 @@ class _HomePageState extends ConsumerState<HomePage> {
                             _buildOptionsGrid(isDark, settings),
                             const SizedBox(height: 16),
 
+                            // REVISION 6: Max pages control (only for username input)
+                            if (_inputType == 'username') ...[
+                              _buildMaxPagesControl(isDark, settings),
+                              const SizedBox(height: 16),
+                            ],
+
                             // Submit row (fetch info only)
                             _buildSubmitRow(isDark, jobState, settings),
 
@@ -273,13 +405,16 @@ class _HomePageState extends ConsumerState<HomePage> {
                           ],
                         ),
                       ),
+                      // Extra padding at bottom for keyboard
+                      SizedBox(height: MediaQuery.of(context).viewInsets.bottom > 0 ? 16 : 0),
                     ],
                   ),
                 ),
               ),
 
-              // Footer
-              _buildFooter(isDark),
+              // Footer - only show when keyboard is not visible
+              if (MediaQuery.of(context).viewInsets.bottom == 0)
+                _buildFooter(isDark),
             ],
           ),
         ),
@@ -658,6 +793,116 @@ class _HomePageState extends ConsumerState<HomePage> {
     );
   }
 
+  /// REVISION 6: Max pages control with +/- buttons and slider
+  /// Shows only for username input, above Submit button
+  Widget _buildMaxPagesControl(bool isDark, SettingsState settings) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            // Numeric input with +/- buttons
+            Container(
+              width: 120,
+              height: 40,
+              decoration: BoxDecoration(
+                color: NeumorphismTheme.getSurfaceColor(isDark),
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: NeumorphismTheme.getInsetShadows(isDark, intensity: 0.4),
+              ),
+              child: Row(
+                children: [
+                  // Minus button
+                  InkWell(
+                    onTap: settings.maxPages > 1
+                        ? () => ref.read(settingsProvider.notifier).setMaxPages(settings.maxPages - 1)
+                        : null,
+                    child: Container(
+                      width: 32,
+                      height: 40,
+                      alignment: Alignment.center,
+                      child: Icon(
+                        Icons.remove,
+                        size: 16,
+                        color: settings.maxPages > 1
+                            ? NeumorphismTheme.getTextColor(isDark)
+                            : NeumorphismTheme.getSecondaryTextColor(isDark).withOpacity(0.5),
+                      ),
+                    ),
+                  ),
+                  // Value display
+                  Expanded(
+                    child: Container(
+                      alignment: Alignment.center,
+                      child: Text(
+                        '${settings.maxPages}',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: NeumorphismTheme.getTextColor(isDark),
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Plus button
+                  InkWell(
+                    onTap: settings.maxPages < 100
+                        ? () => ref.read(settingsProvider.notifier).setMaxPages(settings.maxPages + 1)
+                        : null,
+                    child: Container(
+                      width: 32,
+                      height: 40,
+                      alignment: Alignment.center,
+                      child: Icon(
+                        Icons.add,
+                        size: 16,
+                        color: settings.maxPages < 100
+                            ? NeumorphismTheme.getTextColor(isDark)
+                            : NeumorphismTheme.getSecondaryTextColor(isDark).withOpacity(0.5),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Slider
+            Expanded(
+              child: SliderTheme(
+                data: SliderThemeData(
+                  activeTrackColor: AppColors.primary,
+                  inactiveTrackColor: NeumorphismTheme.getSurfaceColor(isDark),
+                  thumbColor: AppColors.primary,
+                  overlayColor: AppColors.primary.withOpacity(0.2),
+                  trackHeight: 4,
+                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                ),
+                child: Slider(
+                  value: settings.maxPages.toDouble(),
+                  min: 1,
+                  max: 100,
+                  divisions: 99,
+                  onChanged: (value) {
+                    ref.read(settingsProvider.notifier).setMaxPages(value.round());
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        // Help text
+        Text(
+          'Max pages: default 50, max 100, 1 page ≈ 15 items',
+          style: TextStyle(
+            fontSize: 10,
+            color: NeumorphismTheme.getSecondaryTextColor(isDark),
+          ),
+        ),
+      ],
+    );
+  }
+
   /// Submit row - only fetches info, does NOT download
   /// In continue mode, Submit is disabled (uses loaded metadata)
   Widget _buildSubmitRow(bool isDark, AppJobState jobState, SettingsState settings) {
@@ -688,6 +933,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                     ref.read(jobProvider.notifier).startExtraction(
                           input: _inputController.text,
                           mediaType: settings.mediaType,
+                          saveMetadata: settings.saveMetadata, // REVISION 1: Save metadata after parsing
+                          maxPages: settings.maxPages, // REVISION 6: Use max pages setting
+                          verbose: settings.verbose,
                         );
                   }
                 : null,
@@ -779,57 +1027,93 @@ class _HomePageState extends ConsumerState<HomePage> {
           ),
           const SizedBox(height: 10),
           
-          // Avatar preview for username mode
-          if (isUsernameMode && jobState.author?.avatarUrl != null) ...[
-            Center(
-              child: Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
-                    width: 3,
+          // REVISION 4: Avatar on LEFT, stats on RIGHT (username mode only)
+          if (isUsernameMode && jobState.author != null) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Avatar - rounded square (left)
+                if (jobState.author?.avatarUrl != null)
+                  Container(
+                    width: 70,
+                    height: 70,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12), // Rounded square
+                      border: Border.all(
+                        color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+                        width: 2,
+                      ),
+                      boxShadow: NeumorphismTheme.getRaisedShadows(isDark, intensity: 0.5),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Image.network(
+                        jobState.author!.avatarUrl!,
+                        width: 70,
+                        height: 70,
+                        fit: BoxFit.cover,
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return Center(
+                            child: CircularProgressIndicator(
+                              value: loadingProgress.expectedTotalBytes != null
+                                  ? loadingProgress.cumulativeBytesLoaded /
+                                      loadingProgress.expectedTotalBytes!
+                                  : null,
+                              strokeWidth: 2,
+                            ),
+                          );
+                        },
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            color: NeumorphismTheme.getSurfaceColor(isDark),
+                            child: Icon(
+                              Icons.person,
+                              size: 35,
+                              color: NeumorphismTheme.getSecondaryTextColor(isDark),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  )
+                else
+                  Container(
+                    width: 70,
+                    height: 70,
+                    decoration: BoxDecoration(
+                      color: NeumorphismTheme.getSurfaceColor(isDark),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+                        width: 2,
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.person,
+                      size: 35,
+                      color: NeumorphismTheme.getSecondaryTextColor(isDark),
+                    ),
                   ),
-                  boxShadow: NeumorphismTheme.getRaisedShadows(isDark, intensity: 0.5),
-                ),
-                child: ClipOval(
-                  child: Image.network(
-                    jobState.author!.avatarUrl!,
-                    width: 80,
-                    height: 80,
-                    fit: BoxFit.cover,
-                    loadingBuilder: (context, child, loadingProgress) {
-                      if (loadingProgress == null) return child;
-                      return Center(
-                        child: CircularProgressIndicator(
-                          value: loadingProgress.expectedTotalBytes != null
-                              ? loadingProgress.cumulativeBytesLoaded /
-                                  loadingProgress.expectedTotalBytes!
-                              : null,
-                          strokeWidth: 2,
-                        ),
-                      );
-                    },
-                    errorBuilder: (context, error, stackTrace) {
-                      return Container(
-                        color: NeumorphismTheme.getSurfaceColor(isDark),
-                        child: Icon(
-                          Icons.person,
-                          size: 40,
-                          color: NeumorphismTheme.getSecondaryTextColor(isDark),
-                        ),
-                      );
-                    },
+                const SizedBox(width: 12),
+                // Stats on RIGHT
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildResultRow(isDark, 'Username', '@${jobState.author!.username}'),
+                      _buildResultRow(isDark, 'Name', jobState.author!.name),
+                      _buildResultRow(isDark, 'User ID', jobState.author!.userId),
+                    ],
                   ),
                 ),
-              ),
+              ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
           ],
           
-          // Author info
-          if (jobState.author != null) ...[
+          // Author info for single pin (non-username mode)
+          if (!isUsernameMode && jobState.author != null) ...[
             _buildResultRow(isDark, 'Username', '@${jobState.author!.username}'),
             _buildResultRow(isDark, 'Name', jobState.author!.name),
             _buildResultRow(isDark, 'User ID', jobState.author!.userId),
