@@ -4,9 +4,13 @@
 .DESCRIPTION
     This script builds the PinDL Flutter app for production/release.
     It can generate keystores, clean the project, and build release APKs.
+    Supports two build flavors: lite (no FFmpeg) and ffmpeg (full HLS support).
+    Supports per-ABI split builds for smaller APK sizes.
 .EXAMPLE
-    .\build_prod.ps1 -GenerateKeyStore -Clean -BuildRelease
-    .\build_prod.ps1 -BuildRelease
+    .\build_prod.ps1 -GenerateKeyStore -Clean -BuildRelease -Flavor lite
+    .\build_prod.ps1 -BuildRelease -Flavor ffmpeg
+    .\build_prod.ps1 -BuildRelease -Flavor ffmpeg -SplitABI
+    .\build_prod.ps1 -BuildRelease -Flavor all -SplitABI
     .\build_prod.ps1 -Clean
 #>
 
@@ -14,6 +18,9 @@ param(
     [switch]$GenerateKeyStore,
     [switch]$Clean,
     [switch]$BuildRelease,
+    [ValidateSet("lite", "ffmpeg", "all")]
+    [string]$Flavor,
+    [switch]$SplitABI,
     [switch]$Help
 )
 
@@ -25,6 +32,11 @@ $KEYSTORE_PATH = "android/$KEYSTORE_NAME"
 $KEY_PROPERTIES_PATH = "android/key.properties"
 $KEY_ALIAS = "pindl"
 $VALIDITY_DAYS = 10000
+
+# Supported ABIs (ffmpeg_kit_flutter_new_https)
+# arm-v7a, arm-v7a-neon, arm64-v8a, x86, x86_64
+# Flutter uses Android NDK ABI names: armeabi-v7a, arm64-v8a, x86, x86_64
+$SUPPORTED_ABIS = @("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
 
 function Show-Help {
     Write-Host ""
@@ -38,11 +50,20 @@ function Show-Help {
     Write-Host "  -GenerateKeyStore  Generate a new release keystore"
     Write-Host "  -Clean             Clean the Flutter project"
     Write-Host "  -BuildRelease      Build the release APK"
+    Write-Host "  -Flavor <name>     Build flavor: lite, ffmpeg, or all (required with -BuildRelease)"
+    Write-Host "  -SplitABI          Split APK per ABI (armeabi-v7a, arm64-v8a, x86, x86_64)"
     Write-Host "  -Help              Show this help message"
     Write-Host ""
+    Write-Host "Flavors:" -ForegroundColor Yellow
+    Write-Host "  lite     Minimal build without FFmpeg (smaller APK, no HLS conversion)"
+    Write-Host "  ffmpeg   Full build with FFmpeg (HLS -> MP4 conversion support)"
+    Write-Host "  all      Build both lite and ffmpeg APKs"
+    Write-Host ""
     Write-Host "Examples:" -ForegroundColor Yellow
-    Write-Host "  .\build_prod.ps1 -GenerateKeyStore -Clean -BuildRelease"
-    Write-Host "  .\build_prod.ps1 -BuildRelease"
+    Write-Host "  .\build_prod.ps1 -GenerateKeyStore -Clean -BuildRelease -Flavor lite"
+    Write-Host "  .\build_prod.ps1 -BuildRelease -Flavor ffmpeg"
+    Write-Host "  .\build_prod.ps1 -BuildRelease -Flavor ffmpeg -SplitABI"
+    Write-Host "  .\build_prod.ps1 -BuildRelease -Flavor all -SplitABI"
     Write-Host "  .\build_prod.ps1 -Clean"
     Write-Host ""
 }
@@ -152,9 +173,26 @@ function Clean-Project {
     Write-Host "Project cleaned successfully!" -ForegroundColor Green
 }
 
-function Build-Release {
+function Build-Flavor {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet("lite", "ffmpeg")]
+        [string]$FlavorName,
+        [bool]$Split = $false
+    )
+
+    # Determine ENABLE_FFMPEG value based on flavor
+    if ($FlavorName -eq "ffmpeg") {
+        $enableFfmpeg = "true"
+    } else {
+        $enableFfmpeg = "false"
+    }
+
     Write-Host ""
-    Write-Host "Building Release APK..." -ForegroundColor Cyan
+    Write-Host "Building Release APK [$FlavorName]..." -ForegroundColor Cyan
+    Write-Host "  Flavor:        $FlavorName" -ForegroundColor DarkGray
+    Write-Host "  ENABLE_FFMPEG: $enableFfmpeg" -ForegroundColor DarkGray
+    Write-Host "  Split ABI:     $Split" -ForegroundColor DarkGray
     
     # Check if key.properties exists
     if (-not (Test-Path $KEY_PROPERTIES_PATH)) {
@@ -167,22 +205,80 @@ function Build-Release {
     cd android
     ./gradlew --stop
     cd ..
-    flutter build apk --release
+
+    $flutterArgs = @(
+        "build", "apk",
+        "--flavor", $FlavorName,
+        "--dart-define=ENABLE_FFMPEG=$enableFfmpeg",
+        "--release"
+    )
+    if ($Split) {
+        $flutterArgs += "--split-per-abi"
+    }
+
+    & flutter @flutterArgs
     
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Failed to build release APK!" -ForegroundColor Red
+        Write-Host "Failed to build release APK [$FlavorName]!" -ForegroundColor Red
         exit 1
     }
     
     Write-Host ""
-    Write-Host "Release APK built successfully!" -ForegroundColor Green
-    Write-Host "Location: build\app\outputs\flutter-apk\app-release.apk" -ForegroundColor Cyan
-    
-    # Show APK info
-    $apkPath = "build\app\outputs\flutter-apk\app-release.apk"
-    if (Test-Path $apkPath) {
-        $apkSize = (Get-Item $apkPath).Length / 1MB
-        Write-Host "APK Size: $([math]::Round($apkSize, 2)) MB" -ForegroundColor Cyan
+    Write-Host "Release APK [$FlavorName] built successfully!" -ForegroundColor Green
+
+    Show-ApkInfo -FlavorName $FlavorName -IsSplit $Split
+}
+
+function Show-ApkInfo {
+    param(
+        [string]$FlavorName,
+        [bool]$IsSplit
+    )
+
+    $apkDir = "build\app\outputs\flutter-apk"
+
+    if ($IsSplit) {
+        foreach ($abi in $SUPPORTED_ABIS) {
+            $apkPath = "$apkDir\app-$FlavorName-$abi-release.apk"
+            if (Test-Path $apkPath) {
+                $apkSize = [math]::Round((Get-Item $apkPath).Length / 1MB, 2)
+                Write-Host "  $abi : $apkPath ($apkSize MB)" -ForegroundColor Cyan
+            }
+        }
+    } else {
+        $apkPath = "$apkDir\app-$FlavorName-release.apk"
+        if (Test-Path $apkPath) {
+            $apkSize = [math]::Round((Get-Item $apkPath).Length / 1MB, 2)
+            Write-Host "  $apkPath ($apkSize MB)" -ForegroundColor Cyan
+        }
+    }
+}
+
+function Build-Release {
+    if (-not $Flavor) {
+        Write-Host ""
+        Write-Host "Error: -Flavor is required with -BuildRelease" -ForegroundColor Red
+        Write-Host "  Use: -Flavor lite, -Flavor ffmpeg, or -Flavor all" -ForegroundColor Yellow
+        Write-Host ""
+        exit 1
+    }
+
+    $doSplit = [bool]$SplitABI
+
+    if ($Flavor -eq "all") {
+        Build-Flavor -FlavorName "lite" -Split $doSplit
+        Build-Flavor -FlavorName "ffmpeg" -Split $doSplit
+        
+        Write-Host ""
+        Write-Host "Both flavors built:" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "  [lite]" -ForegroundColor Yellow
+        Show-ApkInfo -FlavorName "lite" -IsSplit $doSplit
+        Write-Host ""
+        Write-Host "  [ffmpeg]" -ForegroundColor Yellow
+        Show-ApkInfo -FlavorName "ffmpeg" -IsSplit $doSplit
+    } else {
+        Build-Flavor -FlavorName $Flavor -Split $doSplit
     }
 }
 
@@ -217,3 +313,6 @@ if ($BuildRelease) {
 Write-Host ""
 Write-Host "All tasks completed!" -ForegroundColor Green
 Write-Host ""
+cd android
+./gradlew --stop
+cd ..
