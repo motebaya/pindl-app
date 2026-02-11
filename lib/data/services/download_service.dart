@@ -82,11 +82,18 @@ class DownloadService {
     }
   }
   
+  /// Save a file from temp path to public Downloads directory (public API for HLS converter)
+  /// Returns the public path where file was saved
+  Future<String?> saveFileToDownloads(String tempPath, String filename, String subFolder, {bool overwrite = true}) async {
+    return _saveToPublicDownloads(tempPath, filename, subFolder, overwrite: overwrite);
+  }
+  
   /// Save a temp file to public Downloads directory via MediaStore
   /// Returns the public path where file was saved
   /// 
   /// [subFolder] - The subfolder path under PinDL, e.g. "@username/Images"
-  Future<String?> _saveToPublicDownloads(String tempPath, String filename, String subFolder) async {
+  /// [overwrite] - If true, delete existing file before saving; if false, MediaStore may auto-rename
+  Future<String?> _saveToPublicDownloads(String tempPath, String filename, String subFolder, {bool overwrite = true}) async {
     try {
       if (Platform.isAndroid) {
         final mimeType = _getMimeType(filename);
@@ -95,6 +102,7 @@ class DownloadService {
           'filename': filename,
           'mimeType': mimeType,
           'subFolder': subFolder,
+          'overwrite': overwrite,
         });
         return result;
       }
@@ -129,6 +137,11 @@ class DownloadService {
       default:
         return 'application/octet-stream';
     }
+  }
+  
+  /// Check if a file already exists in the public Downloads folder (public API)
+  Future<bool> fileExistsInDownloads(String filename, String subFolder) async {
+    return _fileExistsInDownloads(filename, subFolder);
   }
   
   /// Check if a file already exists in the public Downloads folder
@@ -200,6 +213,37 @@ class DownloadService {
     } catch (e) {
       print('listFilesInFolder error: $e');
       return [];
+    }
+  }
+  
+  /// Check if MANAGE_EXTERNAL_STORAGE permission is granted (Android 11+)
+  /// Required for "continue" mode to work after app reinstall
+  Future<bool> hasManageStoragePermission() async {
+    try {
+      if (Platform.isAndroid) {
+        final result = await _mediaChannel.invokeMethod<bool>('hasManageStoragePermission');
+        return result ?? false;
+      }
+      return true; // Other platforms don't need this permission
+    } catch (e) {
+      print('hasManageStoragePermission error: $e');
+      return false;
+    }
+  }
+  
+  /// Request MANAGE_EXTERNAL_STORAGE permission (Android 11+)
+  /// Opens system settings for the user to grant permission
+  /// Returns true if permission was already granted
+  Future<bool> requestManageStoragePermission() async {
+    try {
+      if (Platform.isAndroid) {
+        final result = await _mediaChannel.invokeMethod<bool>('requestManageStorage');
+        return result ?? false;
+      }
+      return true;
+    } catch (e) {
+      print('requestManageStoragePermission error: $e');
+      return false;
     }
   }
   
@@ -375,7 +419,8 @@ class DownloadService {
       await File(partPath).rename(tempPath);
       
       // Save to public Downloads via MediaStore (deletes temp file internally)
-      final publicPath = await _saveToPublicDownloads(tempPath, task.filename, subFolder);
+      // Pass overwrite flag to control whether existing file should be replaced
+      final publicPath = await _saveToPublicDownloads(tempPath, task.filename, subFolder, overwrite: overwrite);
       
       if (publicPath != null) {
         _actualOutputPath = 'Downloads/$subFolder';
@@ -465,7 +510,8 @@ class DownloadService {
       await File(partPath).rename(tempPath);
       
       // Save to public Downloads via MediaStore (deletes temp file internally)
-      final publicPath = await _saveToPublicDownloads(tempPath, safeFilename, subFolder);
+      // For single file download, always use overwrite mode (existence check already done)
+      final publicPath = await _saveToPublicDownloads(tempPath, safeFilename, subFolder, overwrite: overwrite);
       
       if (publicPath != null) {
         _actualOutputPath = 'Downloads/$subFolder';
