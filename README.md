@@ -127,16 +127,33 @@ The debug APK will be at: `build/app/outputs/flutter-apk/app-debug.apk`
 
 ### Production/Release Build
 
+The app supports two build flavors:
+- **lite**: Minimal build without FFmpeg (smaller APK, no HLS conversion)
+- **ffmpeg**: Full build with FFmpeg support (HLS → MP4 conversion, includes `ffmpeg_kit_flutter_new_https`)
+
+And two ABI build modes:
+- **Standard**: Single APK with all ABIs (~larger file size)
+- **Split ABI**: Separate APKs per architecture (armeabi-v7a, arm64-v8a, x86, x86_64) for smaller file sizes
+
 #### Using Build Scripts (Recommended)
 
 **PowerShell (Windows):**
 
 ```powershell
 # First time: Generate keystore, clean, and build
-.\build_prod.ps1 -GenerateKeyStore -Clean -BuildRelease
+.\build_prod.ps1 -GenerateKeyStore -Clean -BuildRelease -Flavor lite
 
-# Subsequent builds
-.\build_prod.ps1 -BuildRelease
+# Build lite flavor (no FFmpeg)
+.\build_prod.ps1 -BuildRelease -Flavor lite
+
+# Build ffmpeg flavor (with FFmpeg support)
+.\build_prod.ps1 -BuildRelease -Flavor ffmpeg
+
+# Build with split ABI (smaller APKs per architecture)
+.\build_prod.ps1 -BuildRelease -Flavor ffmpeg -SplitABI
+
+# Build both flavors with split ABI
+.\build_prod.ps1 -BuildRelease -Flavor all -SplitABI
 
 # Clean only
 .\build_prod.ps1 -Clean
@@ -152,10 +169,19 @@ The debug APK will be at: `build/app/outputs/flutter-apk/app-debug.apk`
 chmod +x build_prod.sh
 
 # First time: Generate keystore, clean, and build
-./build_prod.sh --generatekeystore --clean --build-release
+./build_prod.sh --generatekeystore --clean --build-release --flavor lite
 
-# Subsequent builds
-./build_prod.sh --build-release
+# Build lite flavor (no FFmpeg)
+./build_prod.sh --build-release --flavor lite
+
+# Build ffmpeg flavor (with FFmpeg support)
+./build_prod.sh --build-release --flavor ffmpeg
+
+# Build with split ABI (smaller APKs per architecture)
+./build_prod.sh --build-release --flavor ffmpeg --splitABI
+
+# Build both flavors with split ABI
+./build_prod.sh --build-release --flavor all --splitABI
 
 # Clean only
 ./build_prod.sh --clean
@@ -163,6 +189,17 @@ chmod +x build_prod.sh
 # Show help
 ./build_prod.sh --help
 ```
+
+**Build Flavors:**
+- `lite`: ~15-20MB APK, no video format conversion (HLS videos stay as HLS)
+- `ffmpeg`: ~50-60MB APK, includes FFmpeg for HLS → MP4 conversion
+- `all`: Builds both flavors
+
+**Split ABI Benefits:**
+- Reduces APK size by ~40-60% per architecture
+- Faster downloads and installation for end users
+- Google Play automatically serves the correct APK for each device
+- Supported ABIs: armeabi-v7a (32-bit ARM), arm64-v8a (64-bit ARM), x86 (32-bit Intel), x86_64 (64-bit Intel)
 
 #### Manual Build (Without Scripts)
 
@@ -189,10 +226,19 @@ storeFile=../pindl-release.jks
 3. **Build Release APK:**
 
 ```bash
-flutter build apk --release
+# Build lite flavor (no FFmpeg)
+flutter build apk --flavor lite --dart-define=ENABLE_FFMPEG=false --release
+
+# Build ffmpeg flavor (with FFmpeg)
+flutter build apk --flavor ffmpeg --dart-define=ENABLE_FFMPEG=true --release
+
+# Build with split ABI (add --split-per-abi flag)
+flutter build apk --flavor ffmpeg --dart-define=ENABLE_FFMPEG=true --release --split-per-abi
 ```
 
-The release APK will be at: `build/app/outputs/flutter-apk/app-release.apk`
+**Output locations:**
+- Standard build: `build/app/outputs/flutter-apk/app-{flavor}-release.apk`
+- Split ABI build: `build/app/outputs/flutter-apk/app-{flavor}-{abi}-release.apk`
 
 ## Storage Structure
 
