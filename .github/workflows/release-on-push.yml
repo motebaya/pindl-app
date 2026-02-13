@@ -112,9 +112,7 @@ jobs:
         if: steps.tagcheck.outputs.exists == 'false'
         shell: bash
         run: |
-          cd android
-          ./gradlew --stop
-          cd ..
+          ./android/gradlew --stop
 
       - name: Build lite (split per ABI)
         if: steps.tagcheck.outputs.exists == 'false'
