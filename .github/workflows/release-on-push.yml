@@ -138,13 +138,16 @@ jobs:
           APKDIR="build/app/outputs/flutter-apk"
 
           # Split-per-abi outputs:
-          # app-<flavor>-<abi>-release.apk
+          # Format Flutter: app-<abi>-<flavor>-release.apk
           for flavor in lite ffmpeg; do
             for abi in armeabi-v7a arm64-v8a x86_64; do
-              src="${APKDIR}/app-${flavor}-${abi}-release.apk"
+              src="${APKDIR}/app-${abi}-${flavor}-release.apk"
+
               if [[ -f "$src" ]]; then
                 dst="${OUTDIR}/PinDL-${flavor}-${abi}-v${VERSION}-${BUILD}.apk"
                 cp -v "$src" "$dst"
+              else
+                echo "File not found: $src"
               fi
             done
           done
