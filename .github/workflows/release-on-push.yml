@@ -1,0 +1,190 @@
+name: Build + Tag + Release (on push main)
+
+on:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from pubspec.yaml
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW=$(grep -E '^version:' pubspec.yaml | awk '{print $2}')
+          BASE="${RAW%%+*}"        # 2.0.0
+          BUILD="${RAW##*+}"       # 5  (if no +, will equal RAW)
+          if [[ "$RAW" == "$BASE" ]]; then
+            # no +buildNumber found; default b1
+            BUILD="1"
+          fi
+          TAG="v${BASE}-b${BUILD}"
+          echo "raw=$RAW" >> "$GITHUB_OUTPUT"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Computed tag: $TAG"
+
+      - name: Check if tag already exists
+        id: tagcheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags
+          if git rev-parse "${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag already exists -> skipping build/release."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Tag does not exist -> will build/release."
+          fi
+
+      - name: Stop if already released
+        if: steps.tagcheck.outputs.exists == 'true'
+        shell: bash
+        run: echo "Nothing to do."
+
+      - name: Setup Java 17
+        if: steps.tagcheck.outputs.exists == 'false'
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Flutter (stable)
+        if: steps.tagcheck.outputs.exists == 'false'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          cache: true
+
+      - name: Cache Gradle
+        if: steps.tagcheck.outputs.exists == 'false'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Write keystore (from secrets)
+        if: steps.tagcheck.outputs.exists == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android/app
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/pindl-release.jks
+
+      - name: Write android/key.properties
+        if: steps.tagcheck.outputs.exists == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          storeFile=app/pindl-release.jks
+          EOF
+
+      - name: Flutter pub get
+        if: steps.tagcheck.outputs.exists == 'false'
+        run: flutter pub get
+
+      - name: Gradle stop (like your script)
+        if: steps.tagcheck.outputs.exists == 'false'
+        shell: bash
+        run: |
+          cd android
+          ./gradlew --stop
+          cd ..
+
+      - name: Build lite (split per ABI)
+        if: steps.tagcheck.outputs.exists == 'false'
+        run: flutter build apk --release --flavor lite --dart-define=ENABLE_FFMPEG=false --split-per-abi
+
+      - name: Build ffmpeg (split per ABI)
+        if: steps.tagcheck.outputs.exists == 'false'
+        run: flutter build apk --release --flavor ffmpeg --dart-define=ENABLE_FFMPEG=true --split-per-abi
+
+      - name: Build lite (universal)
+        if: steps.tagcheck.outputs.exists == 'false'
+        run: flutter build apk --release --flavor lite --dart-define=ENABLE_FFMPEG=false
+
+      - name: Build ffmpeg (universal)
+        if: steps.tagcheck.outputs.exists == 'false'
+        run: flutter build apk --release --flavor ffmpeg --dart-define=ENABLE_FFMPEG=true
+
+      - name: Collect & rename APKs
+        if: steps.tagcheck.outputs.exists == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.ver.outputs.base }}"
+          BUILD="b${{ steps.ver.outputs.build }}"
+          OUTDIR="dist"
+          mkdir -p "$OUTDIR"
+
+          APKDIR="build/app/outputs/flutter-apk"
+
+          # Split-per-abi outputs:
+          # app-<flavor>-<abi>-release.apk
+          for flavor in lite ffmpeg; do
+            for abi in armeabi-v7a arm64-v8a x86_64; do
+              src="${APKDIR}/app-${flavor}-${abi}-release.apk"
+              if [[ -f "$src" ]]; then
+                dst="${OUTDIR}/PinDL-${flavor}-${abi}-v${VERSION}-${BUILD}.apk"
+                cp -v "$src" "$dst"
+              fi
+            done
+          done
+
+          # Universal outputs:
+          # app-<flavor>-release.apk
+          for flavor in lite ffmpeg; do
+            src="${APKDIR}/app-${flavor}-release.apk"
+            if [[ -f "$src" ]]; then
+              dst="${OUTDIR}/PinDL-${flavor}-universal-v${VERSION}-${BUILD}.apk"
+              cp -v "$src" "$dst"
+            fi
+          done
+
+          ls -alh "$OUTDIR"
+
+      - name: Create and push tag
+        if: steps.tagcheck.outputs.exists == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ver.outputs.tag }}"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release + upload artifacts
+        if: steps.tagcheck.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          files: dist/*.apk
