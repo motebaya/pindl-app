@@ -71,3 +71,7 @@ git_command*
 
 dummy*
 rename*
+
+workflow*.md
+
+trash/*
