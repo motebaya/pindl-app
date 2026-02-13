@@ -23,47 +23,68 @@ PinDL is a Flutter-based Android application that allows users to download publi
 
 ```mermaid
 flowchart TD
-    A[User Input] --> B{Input Type?}
-    B -->|Username| C[Fetch User Config]
-    B -->|Pin URL/ID| D[Fetch Pin Data]
+    A[User Input] --> B{Short URL?}
+    B -->|pin.it link| C[Resolve Short URL]
+    B -->|No| D{Input Type?}
 
-    C --> E[Get User Pins with Pagination]
-    E --> F[Parse Media URLs]
+    C --> C1{Resolved Type?}
+    C1 -->|Pin Page| D
+    C1 -->|User Profile| C2[Update Input Field to @username]
+    C2 --> C3[User Adjusts Settings & Submits Manually]
+    C3 --> D
 
-    D --> G[Extract Media Info]
-    G --> F
+    D -->|Username| E[Fetch User Config]
+    D -->|Pin URL/ID| F[Fetch Pin Data]
 
-    F --> H{Media Type Filter}
-    H -->|Images| I[Queue Image Downloads]
-    H -->|Videos| J{Video Format?}
+    E --> G[Get User Pins with Pagination]
+    G --> H[Parse Media URLs]
 
-    J -->|Direct MP4| K[Queue MP4 Downloads]
-    J -->|HLS .m3u8| L{Build Flavor?}
+    F --> I[Extract Media Info]
+    I --> H
 
-    L -->|FFmpeg Build| M[Parse HLS Master Playlist]
-    M --> N[Select Best Video+Audio Variant]
-    N --> O["FFmpeg Demux/Remux (stream-copy)"]
-    O --> P[Output MP4]
+    H --> J{Media Type Filter}
+    J -->|Images| K[Queue Image Downloads]
+    J -->|Videos| L{Video Format?}
 
-    L -->|Lite Build| Q[Re-fetch Pin as Single URL]
-    Q --> R{Direct MP4 Found?}
-    R -->|Yes| S[Download Direct MP4]
-    R -->|No| T[Skip / Error]
+    L -->|Direct MP4| M[Queue MP4 Downloads]
+    L -->|HLS .m3u8| N{Build Flavor?}
 
-    I --> U[Download via Dio]
-    K --> U
-    S --> U
+    N -->|FFmpeg Build| O[Parse HLS Master Playlist]
+    O --> P[Select Best Video+Audio Variant]
+    P --> Q["FFmpeg Demux/Remux (stream-copy)"]
+    Q --> R[Output MP4]
 
-    U --> V[Save to Downloads/PinDL]
-    P --> V
-    V --> W[Update MediaStore]
-    W --> X[Save Metadata JSON]
+    N -->|Lite Build| S[Re-fetch Pin as Single URL]
+    S --> T{Direct MP4 Found?}
+    T -->|Yes| U[Download Direct MP4]
+    T -->|No| V[Skip / Error]
 
-    X --> Y{Interrupted?}
-    Y -->|Yes| Z[Save Resume Stats]
-    Y -->|No| AA[Complete]
+    K --> W[Download via Dio]
+    M --> W
+    U --> W
 
-    Z --> AB[Continue Mode Available]
+    W --> X{App in Background?}
+    X -->|Yes| X1[Foreground Service Active]
+    X1 --> X2[Progress Notification with Bar]
+    X2 --> Y
+    X -->|No| Y[Save to Downloads/PinDL]
+
+    R --> Y
+    Y --> Z[Update MediaStore]
+    Z --> AA[Save Metadata JSON]
+
+    AA --> AB{Interrupted?}
+    AB -->|Yes| AC[Save Resume Stats]
+    AB -->|No| AD{App in Background?}
+
+    AD -->|Yes| AE[Completion Notification with Sound]
+    AE --> AF[Complete]
+    AD -->|No| AF
+
+    AC --> AG[Continue Mode Available]
+    AG --> AH{Same Media Type?}
+    AH -->|Yes| AI[Resume from last_index_downloaded]
+    AH -->|No| AJ[Start Fresh for New Type]
 ```
 
 ## Features
@@ -76,12 +97,20 @@ flowchart TD
 | Download from Pinterest username     | ✅     |
 | Download single pins via URL         | ✅     |
 | Download single pins via pin ID      | ✅     |
+| Short URL resolution (pin.it)        | ✅     |
 | Image download support               | ✅     |
 | Video download support (720p)        | ✅     |
 | HLS video conversion (FFmpeg build)  | ✅     |
 | HLS fallback extraction (Lite build) | ✅     |
 | Batch/bulk downloads                 | ✅     |
+| Background downloads (foreground service) | ✅ |
+| Progress notifications with bar      | ✅     |
+| Completion notifications with sound  | ✅     |
 | Resume interrupted downloads         | ✅     |
+| Cross-session progress accumulation  | ✅     |
+| Per-media-type continue mode         | ✅     |
+| Task state persistence (Hive)        | ✅     |
+| Crash recovery (WorkManager)         | ✅     |
 | Metadata saving (JSON)               | ✅     |
 | Skip existing files                  | ✅     |
 | Overwrite mode                       | ✅     |
@@ -103,18 +132,21 @@ lib/
 │   ├── theme/              # App themes and Neumorphism styles
 │   └── utils/              # Utility functions and validators
 ├── data/
-│   ├── models/             # Data models (Pin, Author, etc.)
-│   └── services/           # API and download services
+│   ├── models/             # Data models (Pin, Author, BackgroundTaskState, etc.)
+│   ├── parsers/            # Pinterest HTML/JSON parsers
+│   └── services/           # API, download, notification, and persistence services
 ├── presentation/
 │   ├── pages/              # UI screens (Home, History, About, etc.)
-│   ├── providers/          # Riverpod state management
+│   ├── providers/          # Riverpod state management + foreground service manager
 │   └── widgets/            # Reusable Soft UI widgets
-└── main.dart               # App entry point
+└── main.dart               # App entry point (Hive + WorkManager init)
 
 android/
 ├── app/
-│   ├── src/main/kotlin/    # Kotlin code (MainActivity, MediaStore)
-│   └── build.gradle.kts    # Android build configuration
+│   ├── src/main/
+│   │   ├── kotlin/         # Kotlin code (MainActivity, MediaChannelHandler)
+│   │   └── res/drawable/   # Notification icons (ic_download_notification)
+│   └── build.gradle.kts    # Android build configuration (core library desugaring)
 └── key.properties          # Signing configuration (not in git)
 ```
 
