@@ -23,6 +23,8 @@ import '../widgets/soft_toggle.dart';
 import 'about_page.dart';
 import 'downloads_page.dart';
 import 'history_page.dart';
+import '../providers/foreground_service_manager.dart';
+import '../../data/services/task_state_persistence.dart';
 
 /// Main home page - Single page app design
 /// Flow: Submit (fetch info) -> Result Info -> Download (confirm)
@@ -47,6 +49,9 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
   bool _hasStoragePermission = true;
   bool _isPermissionDialogShowing = false;
 
+  // Foreground service manager for background execution
+  ForegroundServiceManager? _foregroundServiceManager;
+
   @override
   void initState() {
     super.initState();
@@ -54,6 +59,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     // Check storage permission after first frame renders
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkStoragePermission();
+      _initForegroundService();
     });
   }
 
@@ -62,6 +68,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     WidgetsBinding.instance.removeObserver(this);
     _inputController.dispose();
     _disposeVideoController();
+    _foregroundServiceManager?.dispose();
     super.dispose();
   }
 
@@ -69,6 +76,116 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _recheckStoragePermission();
+    }
+    // Delegate lifecycle events to foreground service manager
+    _foregroundServiceManager?.didChangeAppLifecycleState(state);
+  }
+
+  // ── Foreground service initialization ──
+
+  void _initForegroundService() {
+    final persistence = ref.read(taskStatePersistenceProvider);
+    _foregroundServiceManager = ForegroundServiceManager(
+      ref: ref,
+      persistence: persistence,
+    );
+    _foregroundServiceManager!.init();
+
+    // Wire foreground service callbacks to JobNotifier
+    final jobNotifier = ref.read(jobProvider.notifier);
+    jobNotifier.onTaskStarted = () {
+      _foregroundServiceManager?.onTaskStarted();
+    };
+    jobNotifier.onTaskCompleted = ({required String taskType}) {
+      _foregroundServiceManager?.onTaskCompleted(taskType: taskType);
+    };
+    jobNotifier.onExtractionProgress = ({
+      required String username,
+      required int itemCount,
+      required int currentPage,
+      required int maxPage,
+    }) {
+      _foregroundServiceManager?.updateExtractionNotification(
+        username: username,
+        itemCount: itemCount,
+        currentPage: currentPage,
+        maxPage: maxPage,
+      );
+    };
+
+    // Wire short URL resolution callback to update the input field
+    jobNotifier.onInputResolved = ({
+      required String resolvedInput,
+      required bool isUsername,
+    }) {
+      if (mounted) {
+        setState(() {
+          _inputController.text = isUsername ? '@$resolvedInput' : resolvedInput;
+          _inputType = isUsername ? 'username' : 'pin';
+          _inputError = null;
+        });
+      }
+    };
+
+    // Check for interrupted tasks from previous session
+    _checkInterruptedTasks(persistence);
+  }
+
+  /// Check Hive for interrupted tasks and prompt user to resume.
+  Future<void> _checkInterruptedTasks(dynamic persistence) async {
+    try {
+      final taskPersistence = persistence as TaskStatePersistence;
+      // Ensure box is open
+      await taskPersistence.init();
+      if (!taskPersistence.hasInterruptedTask()) return;
+
+      final task = taskPersistence.getActiveTask();
+      if (task == null) return;
+
+      if (!mounted) return;
+
+      final shouldResume = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Resume Interrupted Task?'),
+          content: Text(
+            task.taskType == 'extraction'
+                ? 'An extraction for @${task.username ?? 'unknown'} was interrupted.\n'
+                  'Progress: page ${task.currentPage}/${task.maxPages}, '
+                  '${task.totalItems} items collected.'
+                : 'A download was interrupted.\n'
+                  'Progress: ${task.currentIndex}/${task.totalItems} items\n'
+                  'Success: ${task.successCount}, Skipped: ${task.skippedCount}, '
+                  'Failed: ${task.failedCount}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Discard'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Resume'),
+            ),
+          ],
+        ),
+      );
+
+      if (shouldResume == true) {
+        // Resume is handled by the next extraction/download which reads
+        // persisted state. The user can re-enter the username and continue mode
+        // will pick up from last saved metadata.
+        // For now, pre-fill the input field with the username.
+        if (task.username != null && task.username!.isNotEmpty) {
+          _inputController.text = task.username!;
+        }
+      } else {
+        // User declined — clear the interrupted state
+        await taskPersistence.clearActiveTask();
+      }
+    } catch (e) {
+      debugPrint('Error checking interrupted tasks: $e');
     }
   }
 
@@ -988,8 +1105,22 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
           : jobState.remainingImages;
     }
     
-    // Check if all items are already downloaded (continue mode with 0 remaining)
-    final allDownloaded = isContinueMode && remainingToDownload == 0;
+    // Check if all items are already downloaded:
+    // 1. Continue mode with 0 remaining items for this media type
+    // 2. Per-type completion flag set (unless overwrite is enabled)
+    final allDownloadedContinue = isContinueMode && remainingToDownload == 0;
+    final bool currentTypeFullyDownloaded;
+    if (isSinglePin) {
+      final imagesDone = !settings.downloadImage || jobState.imagesFullyDownloaded;
+      final videosDone = !settings.downloadVideo || jobState.videosFullyDownloaded;
+      currentTypeFullyDownloaded = imagesDone && videosDone;
+    } else {
+      currentTypeFullyDownloaded = settings.mediaType == MediaType.video
+          ? jobState.videosFullyDownloaded
+          : jobState.imagesFullyDownloaded;
+    }
+    final typeBlocked = currentTypeFullyDownloaded && !settings.overwrite;
+    final allDownloaded = allDownloadedContinue || typeBlocked;
     
     return Container(
       padding: const EdgeInsets.all(12),
@@ -1121,11 +1252,11 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
           
           const Divider(height: 16),
           
-          // Continue mode: show previous stats
+          // Continue mode: show accumulated progress from all previous sessions
           if (isContinueMode && isUsernameMode) ...[
             _buildResultRow(
               isDark, 
-              'Previous Session',
+              'Total Progress',
               '${jobState.previousDownloaded} downloaded, ${jobState.previousSkipped} skipped, ${jobState.previousFailed} failed',
             ),
             if (jobState.wasInterrupted) ...[
@@ -1607,12 +1738,32 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     final isDownloading = jobState.isDownloading;
     final isCompleted = jobState.status == JobStatus.completed;
     final isContinueMode = jobState.isContinueMode;
+    final isSinglePin = jobState.singlePinResult != null;
     
     // Calculate remaining items for continue mode
     final remainingToDownload = settings.mediaType == MediaType.video 
         ? jobState.remainingVideos 
         : jobState.remainingImages;
-    final allDownloaded = isContinueMode && remainingToDownload == 0;
+    final allDownloadedContinue = isContinueMode && remainingToDownload == 0;
+    
+    // Per-type completion check: disable button if this media type was already
+    // fully downloaded in the current session (or loaded from metadata).
+    // Overwrite mode bypasses this — user explicitly wants to re-download.
+    final bool currentTypeFullyDownloaded;
+    if (isSinglePin) {
+      // Single pin: check per-checkbox flags
+      final imagesDone = !settings.downloadImage || jobState.imagesFullyDownloaded;
+      final videosDone = !settings.downloadVideo || jobState.videosFullyDownloaded;
+      currentTypeFullyDownloaded = imagesDone && videosDone;
+    } else {
+      // Username mode: check per-radio selection
+      currentTypeFullyDownloaded = settings.mediaType == MediaType.video
+          ? jobState.videosFullyDownloaded
+          : jobState.imagesFullyDownloaded;
+    }
+    final typeBlocked = currentTypeFullyDownloaded && !settings.overwrite;
+    
+    final allDownloaded = allDownloadedContinue || typeBlocked;
     
     // Use a dummy path - actual path is handled by MediaStore in download_service
     const outputPath = 'Downloads/PinDL';
@@ -1692,7 +1843,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    'Nothing to continue. All items have already been downloaded. Run a fresh download with overwrite mode if you want to re-download.',
+                    'All items have already been downloaded. Run a fresh download with overwrite mode if you want to re-download.',
                     style: TextStyle(
                       fontSize: 11,
                       color: AppColors.success,
