@@ -49,4 +49,48 @@ class FormatUtils {
   static String sanitizeFilename(String filename) {
     return filename.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '');
   }
+
+  /// Extract file extension from a URL, stripping query params.
+  /// Returns the extension including the dot (e.g. '.jpg', '.mp4').
+  /// Falls back to [fallback] if no recognizable extension is found.
+  static String extensionFromUrl(String url, {String fallback = '.jpg'}) {
+    try {
+      // Strip query string and fragment
+      final path = Uri.parse(url).path;
+      final lastSegment = path.split('/').last;
+      final dotIndex = lastSegment.lastIndexOf('.');
+      if (dotIndex >= 0 && dotIndex < lastSegment.length - 1) {
+        final ext = lastSegment.substring(dotIndex).toLowerCase();
+        // Only accept known media extensions
+        const validExts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.webm', '.mov', '.m3u8'};
+        if (validExts.contains(ext)) return ext;
+      }
+    } catch (_) {}
+    return fallback;
+  }
+
+  /// Build a deterministic filename from pinId and media role.
+  /// Convention:
+  ///   video:     <pinId>_video.mp4
+  ///   thumbnail: <pinId>_thumbnail.jpg
+  ///   image:     <pinId>_image.jpg  (or <pinId>_image_<index>.jpg for multiples)
+  static String pinFilename({
+    required String pinId,
+    required String role, // 'video', 'thumbnail', 'image'
+    required String url,
+    int? imageIndex,
+  }) {
+    final String ext;
+    if (role == 'video') {
+      ext = '.mp4'; // Always .mp4 for video output
+    } else {
+      ext = extensionFromUrl(url, fallback: '.jpg');
+    }
+
+    final suffix = (role == 'image' && imageIndex != null)
+        ? '${role}_$imageIndex'
+        : role;
+
+    return sanitizeFilename('${pinId}_$suffix$ext');
+  }
 }
