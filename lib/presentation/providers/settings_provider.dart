@@ -68,7 +68,7 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
   static const _downloadImageKey = 'download_image';
   static const _downloadVideoKey = 'download_video';
   static const _showPreviewKey = 'show_preview';
-  static const _continueModeKey = 'continue_mode';
+  // continueMode is intentionally NOT persisted — must always default to false on cold start
   static const _maxPagesKey = 'max_pages';
 
   final SharedPreferences? _prefs;
@@ -89,7 +89,7 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
       downloadImage: prefs.getBool(_downloadImageKey) ?? true,
       downloadVideo: prefs.getBool(_downloadVideoKey) ?? false,
       showPreview: prefs.getBool(_showPreviewKey) ?? true,
-      continueMode: prefs.getBool(_continueModeKey) ?? false,
+      continueMode: false, // Never persisted — always starts unchecked on cold start
       maxPages: prefs.getInt(_maxPagesKey) ?? 50,
     );
   }
@@ -131,7 +131,7 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
 
   void setContinueMode(bool value) {
     state = state.copyWith(continueMode: value);
-    _prefs?.setBool(_continueModeKey, value);
+    // Not persisted to SharedPreferences — must reset to false on every cold start
   }
 
   void setMaxPages(int value) {
