@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/config/build_config.dart';
 import '../../core/exceptions/pinterest_exception.dart';
+import '../../core/utils/format_utils.dart';
 import '../../core/utils/pin_url_validator.dart';
 import '../../data/models/author.dart';
 import '../../data/models/history_item.dart';
@@ -17,8 +18,11 @@ import '../../data/services/hls_converter.dart';
 import '../../data/services/hls_service.dart';
 import '../../data/services/log_service.dart';
 import '../../data/services/pinterest_extractor_service.dart';
+import '../../data/services/task_state_persistence.dart';
+import '../../data/models/background_task_state.dart';
 import 'history_provider.dart';
 import 'log_provider.dart';
+import 'foreground_service_manager.dart';
 
 /// App job state for the new submit->info->download flow
 /// Phase A: idle
@@ -48,6 +52,14 @@ class AppJobState {
   final int lastIndexDownloaded;
   final bool wasInterrupted;
   final bool isContinueMode;
+  /// The media type that was used in the previous download session.
+  /// Used to determine which remaining getter should apply lastIndexDownloaded.
+  /// e.g. if previousMediaType == 'image', only remainingImages subtracts; remainingVideos returns totalVideos.
+  final String? previousMediaType;
+  /// Per-media-type completion flags (in-memory, derived from download results or metadata).
+  /// Used by UI to disable download button for a type that's already fully downloaded.
+  final bool imagesFullyDownloaded;
+  final bool videosFullyDownloaded;
 
   const AppJobState({
     this.status = JobStatus.idle,
@@ -69,6 +81,9 @@ class AppJobState {
     this.lastIndexDownloaded = -1,
     this.wasInterrupted = false,
     this.isContinueMode = false,
+    this.previousMediaType,
+    this.imagesFullyDownloaded = false,
+    this.videosFullyDownloaded = false,
   });
 
   /// Derived state: is currently fetching info (Phase B)
@@ -87,9 +102,10 @@ class AppJobState {
        status == JobStatus.cancelled) &&
       (pins.isNotEmpty || singlePinResult != null);
   
-  /// Derived state: can start download (Phase C only)
+  /// Derived state: can start download (Phase C or after completion)
+  /// Allows re-download after completion (e.g. user switches media type on single pin)
   bool get canDownload => 
-      status == JobStatus.readyToDownload && 
+      (status == JobStatus.readyToDownload || status == JobStatus.completed) && 
       (pins.isNotEmpty || singlePinResult != null);
   
   /// Derived state: can submit new request
@@ -102,15 +118,22 @@ class AppJobState {
 
   int get totalItems => pins.length;
   
-  /// Calculate remaining items for continue mode
+  /// Calculate remaining items for continue mode.
+  /// Uses accumulated download counts (success + skipped + failed) from metadata
+  /// to determine how many items are left. Only applies when previous session
+  /// was for the same media type.
   int get remainingImages {
-    if (!isContinueMode || lastIndexDownloaded < 0) return totalImages;
-    return (totalImages - (lastIndexDownloaded + 1)).clamp(0, totalImages);
+    if (!isContinueMode) return totalImages;
+    if (previousMediaType != null && previousMediaType != 'image') return totalImages;
+    final processed = previousDownloaded + previousSkipped + previousFailed;
+    return (totalImages - processed).clamp(0, totalImages);
   }
   
   int get remainingVideos {
-    if (!isContinueMode || lastIndexDownloaded < 0) return totalVideos;
-    return (totalVideos - (lastIndexDownloaded + 1)).clamp(0, totalVideos);
+    if (!isContinueMode) return totalVideos;
+    if (previousMediaType != null && previousMediaType != 'video') return totalVideos;
+    final processed = previousDownloaded + previousSkipped + previousFailed;
+    return (totalVideos - processed).clamp(0, totalVideos);
   }
 
   AppJobState copyWith({
@@ -133,6 +156,9 @@ class AppJobState {
     int? lastIndexDownloaded,
     bool? wasInterrupted,
     bool? isContinueMode,
+    String? previousMediaType,
+    bool? imagesFullyDownloaded,
+    bool? videosFullyDownloaded,
   }) {
     return AppJobState(
       status: status ?? this.status,
@@ -154,6 +180,9 @@ class AppJobState {
       lastIndexDownloaded: lastIndexDownloaded ?? this.lastIndexDownloaded,
       wasInterrupted: wasInterrupted ?? this.wasInterrupted,
       isContinueMode: isContinueMode ?? this.isContinueMode,
+      previousMediaType: previousMediaType ?? this.previousMediaType,
+      imagesFullyDownloaded: imagesFullyDownloaded ?? this.imagesFullyDownloaded,
+      videosFullyDownloaded: videosFullyDownloaded ?? this.videosFullyDownloaded,
     );
   }
 
@@ -170,12 +199,28 @@ class JobNotifier extends StateNotifier<AppJobState> {
   final DownloadService _downloadService;
   final HlsService? _hlsService;
   final HlsConverter? _hlsConverter;
+  final TaskStatePersistence? _persistence;
   final void Function({
     required String filename,
     required String url,
     required HistoryStatus status,
     String? errorMessage,
   })? _onDownloadComplete;
+  
+  /// Callback when a task (extraction/download) starts
+  void Function()? onTaskStarted;
+  /// Callback when a task completes, with task type ('extraction'/'download')
+  void Function({required String taskType})? onTaskCompleted;
+  /// Callback for extraction page progress (for notification updates)
+  void Function({
+    required String username,
+    required int itemCount,
+    required int currentPage,
+    required int maxPage,
+  })? onExtractionProgress;
+  /// Callback when a short URL is resolved to a canonical input.
+  /// UI should update the input field and media type selection accordingly.
+  void Function({required String resolvedInput, required bool isUsername})? onInputResolved;
   
   // Method channel for MediaStore operations
   static const _mediaChannel = MethodChannel('com.motebaya.pindl/media');
@@ -189,6 +234,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
     required DownloadService downloadService,
     HlsService? hlsService,
     HlsConverter? hlsConverter,
+    TaskStatePersistence? persistence,
     void Function({
       required String filename,
       required String url,
@@ -202,6 +248,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
         // Tree-shaking eliminates HlsService/HlsConverter from lite AOT binaries.
         _hlsService = BuildConfig.enableFfmpeg ? (hlsService ?? HlsService()) : null,
         _hlsConverter = BuildConfig.enableFfmpeg ? (hlsConverter ?? HlsConverter()) : null,
+        _persistence = persistence,
         _onDownloadComplete = onDownloadComplete,
         super(const AppJobState());
 
@@ -234,23 +281,92 @@ class JobNotifier extends StateNotifier<AppJobState> {
       return;
     }
 
-    final isUsername = inputType == 'username';
     _extractCancelToken = CancelToken();
 
-    // Transition to Phase B: fetchingInfo
+    // ── Short URL resolution: resolve pin.it URLs BEFORE routing ──
+    // Short URLs can redirect to either a pin page or a user profile page.
+    // We must resolve first to determine the correct extraction path.
+    String resolvedInput = input;
+    bool isUsername = inputType == 'username';
+
+    if (PinUrlValidator.isShortUrl(input)) {
+      // Transition to fetchingInfo early so UI shows loading state
+      state = AppJobState(
+        status: JobStatus.fetchingInfo,
+        input: input,
+        isUsername: false,
+      );
+      _logService.init('Resolving short URL: $input');
+
+      try {
+        final rawRedirectUrl = await _extractor.resolveShortUrl(
+          input, _extractCancelToken,
+        );
+        _logService.fetch('Redirected to: $rawRedirectUrl');
+
+        // Clean the redirected URL (strip /sent/, query params, etc.)
+        final cleaned = PinUrlValidator.cleanRedirectedUrl(rawRedirectUrl);
+        if (cleaned == null) {
+          state = state.copyWith(
+            status: JobStatus.failed,
+            error: 'Could not parse redirected URL: $rawRedirectUrl',
+          );
+          return;
+        }
+
+        resolvedInput = cleaned.value;
+        isUsername = cleaned.type == 'username';
+        _logService.parse('Resolved to ${cleaned.type}: $resolvedInput');
+
+        // Update input field callback so UI shows the resolved value
+        onInputResolved?.call(resolvedInput: resolvedInput, isUsername: isUsername);
+
+        // If resolved to a username, STOP here — don't auto-extract.
+        // User needs to adjust settings (max pages, media type) before submitting.
+        if (isUsername) {
+          _logService.complete('Short URL resolved to username: @$resolvedInput — submit manually to extract.');
+          state = const AppJobState(status: JobStatus.idle);
+          return;
+        }
+      } on CancelledException {
+        _logService.interrupted('Short URL resolution cancelled');
+        state = state.copyWith(status: JobStatus.cancelled);
+        return;
+      } catch (e) {
+        _logService.error('Failed to resolve short URL: $e');
+        state = state.copyWith(
+          status: JobStatus.failed,
+          error: 'Failed to resolve short URL: $e',
+        );
+        return;
+      }
+    }
+
+    // Transition to Phase B: fetchingInfo (if not already set by short URL resolution)
     state = AppJobState(
       status: JobStatus.fetchingInfo,
-      input: input,
+      input: resolvedInput,
       isUsername: isUsername,
     );
 
-    _logService.init('Loading info for: $input');
+    // Persist initial extraction state
+    _persistExtractionState(resolvedInput, isUsername, mediaType, maxPages);
+
+    // Notify foreground service manager that task started
+    onTaskStarted?.call();
+
+    _logService.init('Loading info for: $resolvedInput');
 
     try {
       if (isUsername) {
-        await _extractUserPins(input, mediaType, saveMetadata: saveMetadata, maxPages: maxPages);
+        await _extractUserPins(resolvedInput, mediaType, saveMetadata: saveMetadata, maxPages: maxPages);
       } else {
-        await _extractSinglePin(input, mediaType);
+        await _extractSinglePin(resolvedInput, mediaType);
+      }
+      // Extraction completed successfully — notify foreground service
+      // so it can show completion notification (identical to download completion)
+      if (state.status == JobStatus.readyToDownload) {
+        onTaskCompleted?.call(taskType: 'extraction');
       }
     } on CancelledException {
       _logService.interrupted('Info loading cancelled');
@@ -264,6 +380,64 @@ class JobNotifier extends StateNotifier<AppJobState> {
         error: e.toString(),
       );
     }
+  }
+
+  // ── Background task state persistence helpers ──
+
+  /// Persist initial extraction state to Hive
+  void _persistExtractionState(String input, bool isUsername, MediaType mediaType, int maxPages) {
+    if (_persistence == null) return;
+    final taskState = BackgroundTaskState(
+      taskId: '${DateTime.now().millisecondsSinceEpoch}',
+      taskType: 'extraction',
+      username: isUsername ? PinUrlValidator.normalizeUsername(input) : null,
+      mediaType: mediaType.name,
+      maxPages: maxPages,
+    );
+    _persistence!.saveActiveTask(taskState);
+  }
+
+  /// Persist download state to Hive
+  void _persistDownloadState(MediaType mediaType, bool overwrite, bool saveMetadata, int totalItems) {
+    if (_persistence == null) return;
+    final taskState = BackgroundTaskState(
+      taskId: '${DateTime.now().millisecondsSinceEpoch}',
+      taskType: 'download',
+      username: state.author?.username,
+      mediaType: mediaType.name,
+      overwrite: overwrite,
+      saveMetadata: saveMetadata,
+      totalItems: totalItems,
+    );
+    _persistence!.saveActiveTask(taskState);
+  }
+
+  /// Update download progress in persisted state
+  void _updatePersistedProgress({
+    int? currentIndex,
+    int? successCount,
+    int? skippedCount,
+    int? failedCount,
+    int? bytesReceived,
+    int? bytesTotal,
+    String? currentFilename,
+    String? failedPinId,
+  }) {
+    _persistence?.updateProgress(
+      currentIndex: currentIndex,
+      successCount: successCount,
+      skippedCount: skippedCount,
+      failedCount: failedCount,
+      bytesReceived: bytesReceived,
+      bytesTotal: bytesTotal,
+      currentFilename: currentFilename,
+      failedPinId: failedPinId,
+    );
+  }
+
+  /// Mark persisted task as completed
+  void _completePersistedTask() {
+    _persistence?.markCompleted();
   }
 
   Future<void> _extractUserPins(String username, MediaType mediaType, {bool saveMetadata = false, int maxPages = 50}) async {
@@ -287,6 +461,18 @@ class JobNotifier extends StateNotifier<AppJobState> {
       cancelToken: _extractCancelToken,
       onProgress: (count, currentPage, maxPage) {
         _logService.fetch('Fetched $count pins (page $currentPage/$maxPage)...');
+        // Persist extraction page progress to Hive
+        _persistence?.updateProgress(
+          currentPage: currentPage,
+          totalItems: count,
+        );
+        // Notify foreground service for notification update
+        onExtractionProgress?.call(
+          username: normalizedUsername,
+          itemCount: count,
+          currentPage: currentPage,
+          maxPage: maxPage,
+        );
       },
     );
     
@@ -416,7 +602,24 @@ class JobNotifier extends StateNotifier<AppJobState> {
       _logService.parse('Previous stats: Downloaded ${result.successDownloaded}, Skipped ${result.skipDownloaded}, Failed ${result.failedDownloaded}');
       _logService.parse('Last index: ${result.lastIndexDownloaded}, Was interrupted: ${result.wasInterrupted}');
       
-      // Update state with loaded metadata
+      // Read previous media type from metadata (used for cross-type continue detection)
+      final previousMediaType = json['media_type'] as String?;
+
+      // Derive per-type completion from accumulated counts:
+      // If (success + skipped + failed) >= total for that type → fully done
+      final totalProcessed = result.successDownloaded + result.skipDownloaded + result.failedDownloaded;
+      final bool imagesAlreadyDone = previousMediaType == 'image' &&
+          !result.wasInterrupted &&
+          result.totalImages > 0 &&
+          totalProcessed >= result.totalImages;
+      final bool videosAlreadyDone = previousMediaType == 'video' &&
+          !result.wasInterrupted &&
+          result.totalVideos > 0 &&
+          totalProcessed >= result.totalVideos;
+
+      // Update state with loaded metadata.
+      // Restore lastIndexDownloaded from metadata so startIndex skips directly
+      // to where the previous session left off — no re-checking from index 0.
       state = AppJobState(
         status: JobStatus.readyToDownload,
         input: username,
@@ -431,11 +634,15 @@ class JobNotifier extends StateNotifier<AppJobState> {
         lastIndexDownloaded: result.lastIndexDownloaded,
         wasInterrupted: result.wasInterrupted,
         isContinueMode: true,
+        previousMediaType: previousMediaType,
+        imagesFullyDownloaded: imagesAlreadyDone,
+        videosFullyDownloaded: videosAlreadyDone,
       );
       
-      final remainingImages = state.remainingImages;
-      final remainingVideos = state.remainingVideos;
-      _logService.complete('Ready to continue. Remaining: $remainingImages images, $remainingVideos videos');
+      final remaining = previousMediaType == 'video'
+          ? state.remainingVideos
+          : state.remainingImages;
+      _logService.complete('Ready to continue. Remaining: $remaining ${previousMediaType ?? "items"}s (processed: ${result.successDownloaded} downloaded, ${result.skipDownloaded} skipped, ${result.failedDownloaded} failed)');
       
       return true;
     } catch (e) {
@@ -472,6 +679,15 @@ class JobNotifier extends StateNotifier<AppJobState> {
     );
 
     _logService.queue('Starting download queue');
+
+    // Persist download state for background recovery
+    final totalToDownload = state.singlePinResult != null
+        ? (downloadImage ? 1 : 0) + (downloadVideo && state.singlePinResult!.hasVideoContent ? 1 : 0)
+        : state.pins.length;
+    _persistDownloadState(mediaType, overwrite, saveMetadata, totalToDownload);
+
+    // Notify foreground service manager that task started
+    onTaskStarted?.call();
 
     try {
       // Handle single pin result
@@ -513,7 +729,9 @@ class JobNotifier extends StateNotifier<AppJobState> {
     if (downloadImage) {
       final imageUrl = result.getImageDownloadUrl(useThumbnailForVideo: true);
       if (imageUrl != null) {
-        final filename = imageUrl.split('/').last;
+        // Deterministic filename: <pinId>_image.jpg or <pinId>_thumbnail.jpg
+        final role = (result.hasVideoContent && !result.hasImage) ? 'thumbnail' : 'image';
+        final filename = FormatUtils.pinFilename(pinId: result.pinId, role: role, url: imageUrl);
         _logService.downloading('Downloading image: $filename');
         
         try {
@@ -564,7 +782,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
     if (downloadVideo && result.hasVideoContent) {
       final videoUrl = result.videoUrl;
       if (videoUrl != null) {
-        final filename = videoUrl.split('/').last;
+        // Deterministic filename: <pinId>_video.mp4
+        final filename = FormatUtils.pinFilename(pinId: result.pinId, role: 'video', url: videoUrl);
         _logService.downloading('Downloading video: $filename');
         
         try {
@@ -621,6 +840,12 @@ class JobNotifier extends StateNotifier<AppJobState> {
       downloadedCount: downloaded,
       skippedCount: skipped,
       failedCount: failed,
+      imagesFullyDownloaded: downloadImage
+          ? true
+          : state.imagesFullyDownloaded,
+      videosFullyDownloaded: downloadVideo
+          ? true
+          : state.videosFullyDownloaded,
     );
     
     _logService.complete('Download complete. Downloaded: $downloaded, Skipped: $skipped, Failed: $failed');
@@ -679,7 +904,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
     
     // Aggregate all URLs to download
     // Added isHls flag for HLS video conversion support
-    final List<({String pinId, String title, String url, bool isVideo, bool isHls, String subFolder})> downloadItems = [];
+    // role: 'video', 'image', or 'thumbnail' — used for deterministic filename generation
+    final List<({String pinId, String title, String url, bool isVideo, bool isHls, String subFolder, String role})> downloadItems = [];
     
     for (final pin in pins) {
       if (isVideoOnly) {
@@ -694,6 +920,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
             isVideo: true,
             isHls: isHls,
             subFolder: videosFolder,
+            role: 'video',
           ));
         }
       } else {
@@ -706,6 +933,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
             isVideo: false,
             isHls: false,
             subFolder: imagesFolder,
+            role: 'image',
           ));
         } else if (pin.hasVideo && pin.thumbnail != null) {
           // For video pins without separate image, download thumbnail
@@ -716,6 +944,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
             isVideo: false,
             isHls: false,
             subFolder: imagesFolder,
+            role: 'thumbnail',
           ));
         }
       }
@@ -729,8 +958,12 @@ class JobNotifier extends StateNotifier<AppJobState> {
       return;
     }
     
-    // In continue mode, skip items up to lastIndexDownloaded
-    final startIndex = state.isContinueMode && state.lastIndexDownloaded >= 0 
+    // In continue mode, skip items up to lastIndexDownloaded — but ONLY when
+    // the current media type matches the previously downloaded media type.
+    // If the user switches types (e.g. images → videos), start from 0.
+    final bool sameMediaType = state.previousMediaType == null || 
+        state.previousMediaType == mediaType.name;
+    final startIndex = state.isContinueMode && state.lastIndexDownloaded >= 0 && sameMediaType
         ? state.lastIndexDownloaded + 1 
         : 0;
     
@@ -782,7 +1015,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
     // Add regular items to download queue
     for (var i = 0; i < regularItems.length; i++) {
       final item = regularItems[i];
-      final filename = item.url.split('/').last;
+      // Deterministic filename based on pinId and role
+      final filename = FormatUtils.pinFilename(pinId: item.pinId, role: item.role, url: item.url);
       pinUrlMap[item.pinId] = (item.url, filename);
       
       _downloadService.enqueue(
@@ -809,6 +1043,10 @@ class JobNotifier extends StateNotifier<AppJobState> {
             downloadedCount: state.downloadedCount + 1,
             currentIndex: state.currentIndex + 1,
           );
+          _updatePersistedProgress(
+            currentIndex: state.currentIndex,
+            successCount: state.downloadedCount,
+          );
           
           final info = pinUrlMap[pinId];
           if (info != null) {
@@ -826,6 +1064,10 @@ class JobNotifier extends StateNotifier<AppJobState> {
             skippedCount: state.skippedCount + 1,
             currentIndex: state.currentIndex + 1,
           );
+          _updatePersistedProgress(
+            currentIndex: state.currentIndex,
+            skippedCount: state.skippedCount,
+          );
         },
         onFailed: (pinId, error) {
           _logService.error('Failed $pinId: $error');
@@ -833,6 +1075,11 @@ class JobNotifier extends StateNotifier<AppJobState> {
           state = state.copyWith(
             failedCount: state.failedCount + 1,
             currentIndex: state.currentIndex + 1,
+          );
+          _updatePersistedProgress(
+            currentIndex: state.currentIndex,
+            failedCount: state.failedCount,
+            failedPinId: pinId,
           );
           
           final info = pinUrlMap[pinId];
@@ -855,7 +1102,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
         if (_downloadCancelToken?.isCancelled ?? false) break;
         
         final item = hlsItems[i];
-        final outputFilename = '${item.pinId}.mp4';  // HLS -> MP4
+        final outputFilename = FormatUtils.pinFilename(pinId: item.pinId, role: 'video', url: item.url);  // HLS -> MP4
         pinUrlMap[item.pinId] = (item.url, outputFilename);
         
         _logService.downloading('HLS video: Fetching playlist for ${item.pinId}...');
@@ -951,7 +1198,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
         if (_downloadCancelToken?.isCancelled ?? false) break;
         
         final item = hlsItems[i];
-        final outputFilename = '${item.pinId}.mp4';
+        final outputFilename = FormatUtils.pinFilename(pinId: item.pinId, role: 'video', url: item.url);
         pinUrlMap[item.pinId] = (item.url, outputFilename);
         
         _logService.downloading('Lite mode: fetching direct video for ${item.pinId}...');
@@ -980,20 +1227,17 @@ class JobNotifier extends StateNotifier<AppJobState> {
           );
           
           if (mediaResult.videoUrl != null) {
-            // Direct MP4 found — download it normally
-            final videoFilename = mediaResult.videoUrl!.split('/').last;
-            final finalFilename = videoFilename.endsWith('.mp4') ? videoFilename : outputFilename;
-            
+            // Direct MP4 found — always use deterministic filename
             await _downloadService.downloadFile(
               url: mediaResult.videoUrl!,
               outputPath: outputPath,
-              filename: finalFilename,
+              filename: outputFilename,
               pinId: item.pinId,
               overwrite: overwrite,
               subFolder: videosFolder,
             );
             
-            _logService.saved('Saved: $finalFilename');
+            _logService.saved('Saved: $outputFilename');
             lastCompletedIndex = startIndex + regularItems.length + i;
             state = state.copyWith(
               downloadedCount: state.downloadedCount + 1,
@@ -1001,7 +1245,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
             );
             
             _onDownloadComplete?.call(
-              filename: finalFilename,
+              filename: outputFilename,
               url: mediaResult.videoUrl!,
               status: HistoryStatus.success,
             );
@@ -1032,7 +1276,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
     // Check if download was cancelled/interrupted - save resume stats
     final wasInterrupted = state.status == JobStatus.cancelled;
     
-    // Calculate combined stats (previous + current session)
+    // Accumulate counts across sessions:
+    // success_downloaded = previous sessions' total + this session's count
     final totalDownloaded = state.previousDownloaded + state.downloadedCount;
     final totalSkipped = state.previousSkipped + state.skippedCount;
     final totalFailed = state.previousFailed + state.failedCount;
@@ -1058,16 +1303,22 @@ class JobNotifier extends StateNotifier<AppJobState> {
     if (!wasInterrupted) {
       state = state.copyWith(
         status: JobStatus.completed,
+        imagesFullyDownloaded: mediaType == MediaType.image
+            ? true
+            : state.imagesFullyDownloaded,
+        videosFullyDownloaded: mediaType == MediaType.video
+            ? true
+            : state.videosFullyDownloaded,
       );
+      _completePersistedTask();
+      // Notify foreground service manager that download completed
+      onTaskCompleted?.call(taskType: 'download');
     }
     
-    final sessionStats = 'Session: ${state.downloadedCount} downloaded, ${state.skippedCount} skipped, ${state.failedCount} failed';
-    final totalStats = state.isContinueMode 
-        ? ' | Total: $totalDownloaded downloaded, $totalSkipped skipped, $totalFailed failed'
-        : '';
+    final sessionStats = '${state.downloadedCount} downloaded, ${state.skippedCount} skipped, ${state.failedCount} failed';
     
     _logService.complete(
-      'Download ${wasInterrupted ? "interrupted" : "complete"}. $sessionStats$totalStats',
+      'Download ${wasInterrupted ? "interrupted" : "complete"}. $sessionStats',
     );
   }
 
@@ -1110,10 +1361,19 @@ final downloadServiceProvider = Provider<DownloadService>((ref) {
 final jobProvider = StateNotifierProvider<JobNotifier, AppJobState>((ref) {
   final downloadHistoryNotifier = ref.read(downloadHistoryProvider.notifier);
   
+  // TaskStatePersistence is initialized in main.dart before providers are created
+  TaskStatePersistence? persistence;
+  try {
+    persistence = ref.watch(taskStatePersistenceProvider);
+  } catch (_) {
+    // Persistence not available (e.g., during testing)
+  }
+  
   return JobNotifier(
     logService: ref.watch(logServiceProvider),
     extractor: ref.watch(pinterestExtractorProvider),
     downloadService: ref.watch(downloadServiceProvider),
+    persistence: persistence,
     onDownloadComplete: ({
       required String filename,
       required String url,
