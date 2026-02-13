@@ -89,8 +89,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p android/app
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/pindl-release.jks
+          mkdir -p android
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/pindl-release.jks
 
       - name: Write android/key.properties
         if: steps.tagcheck.outputs.exists == 'false'
@@ -101,7 +101,7 @@ jobs:
           storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
           keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          storeFile=app/pindl-release.jks
+          storeFile=android/pindl-release.jks
           EOF
 
       - name: Flutter pub get
