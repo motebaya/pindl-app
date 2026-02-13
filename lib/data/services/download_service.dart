@@ -47,6 +47,7 @@ class DownloadService {
   final Map<String, CancelToken> _activeTokens = {};
   int _activeDownloads = 0;
   bool _isCancelled = false;
+  bool _isPaused = false;
   
   // Store the actual output path used (for reporting to user)
   String? _actualOutputPath;
@@ -325,10 +326,17 @@ class DownloadService {
     String subFolder = 'PinDL',
   }) async {
     _isCancelled = false;
+    _isPaused = false;
     final totalItems = _queue.length;
     var currentIndex = 0;
 
     while (_queue.isNotEmpty && !_isCancelled) {
+      // Wait while paused
+      while (_isPaused && !_isCancelled) {
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+      if (_isCancelled) break;
+
       // Start new downloads up to max concurrent limit
       while (_activeDownloads < maxConcurrent &&
           _queue.isNotEmpty &&
@@ -558,6 +566,19 @@ class DownloadService {
     _activeTokens[pinId]?.cancel('User cancelled');
     _activeTokens.remove(pinId);
   }
+
+  /// Pause the download queue (new items won't start, active downloads continue)
+  void pauseQueue() {
+    _isPaused = true;
+  }
+
+  /// Resume the download queue
+  void resumeQueue() {
+    _isPaused = false;
+  }
+
+  /// Whether the queue is paused
+  bool get isPaused => _isPaused;
 
   /// Get queue size
   int get queueSize => _queue.length;
