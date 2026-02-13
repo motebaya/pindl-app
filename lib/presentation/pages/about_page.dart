@@ -61,7 +61,7 @@ class AboutPage extends ConsumerWidget {
 
                           // Version
                           Text(
-                            'Version 2.0.0',
+                            'Version 2.1.0',
                             style: TextStyle(
                               fontSize: 14,
                               color: NeumorphismTheme.getSecondaryTextColor(isDark),
