@@ -5,6 +5,52 @@ All notable changes to PinDL will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-02-12
+
+### Added
+
+- **Foreground service + background notification runtime**:
+  - Added `ForegroundServiceManager` to keep extraction/download alive while app is backgrounded.
+  - Added `NotificationHelper` with progress notifications, completion heads-up, and `ic_download_notification.xml` icon.
+  - Added Android 13+ notification permission request flow and lifecycle-aware service start/stop.
+- **Task state persistence with Hive**:
+  - Added `BackgroundTaskState` + hand-written `BackgroundTaskStateAdapter`.
+  - Added `TaskStatePersistence` service for active task storage, throttled byte-progress writes, and interrupted-task lookup.
+  - Added interrupted-task resume/discard prompt on app startup.
+- **Release automation and release archives**:
+  - Added `.github/workflows/release-on-push.yml` for auto build/tag/release on `main` push.
+  - Added release note archives: `releases/2.0.0.md` and `releases/2.1.0.md`.
+- **URL cleaning and deterministic naming utilities**:
+  - Added `PinUrlValidator.cleanRedirectedUrl()`, `PinUrlValidator.isShortUrl()`, and `ResolvedInput` for `pin.it` redirects.
+  - Added `FormatUtils.extensionFromUrl()` and `FormatUtils.pinFilename()` for deterministic naming (`<pinId>_image`, `<pinId>_thumbnail`, `<pinId>_video`).
+- **`MediaChannelHandler.kt`**: Extracted media MethodChannel operations from `MainActivity` for reuse across foreground/background engine flows.
+- **Download queue pause/resume**: Added `DownloadService.pauseQueue()` and `resumeQueue()` for lifecycle-aware queue control.
+
+### Changed
+
+- **`AndroidManifest.xml`**: Added `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `POST_NOTIFICATIONS`, `WAKE_LOCK`, `RECEIVE_BOOT_COMPLETED` permissions and foreground service declaration (`dataSync`).
+- **`MainActivity.kt`**: Delegates media channel handling to `MediaChannelHandler`; manual plugin registration now includes foreground task, WorkManager, and local notifications.
+- **`android/app/build.gradle.kts`**: Enabled core library desugaring and added `desugar_jdk_libs` dependency for notification/time API compatibility.
+- **`main.dart`**: Registers `BackgroundTaskStateAdapter`, opens `background_tasks` Hive box, and initializes WorkManager callback dispatcher.
+- **`job_provider.dart`**:
+  - Resolves `pin.it` links before routing extraction and updates UI input with canonical pin/username.
+  - Persists extraction/download state and per-item progress for resume/recovery.
+  - Uses per-media completion flags and media-type-aware continue-mode calculations.
+  - Uses deterministic pin-based filenames for image/video/thumbnail output.
+- **`home_page.dart`**: Integrates foreground service lifecycle delegation, interrupted-task resume dialog, short-url input update callback, and per-media all-downloaded gating.
+- **`settings_provider.dart`**: `continueMode` is no longer persisted and now always resets to `false` on cold start.
+- **`pinterest_extractor_service.dart`**: Short-url resolver now returns raw redirect URL for cleaner downstream normalization; profile extraction error text is more actionable.
+- **`android/gradle.properties`**: Set `kotlin.incremental=false` to fix cross-drive (C:/F:) Kotlin cache issues.
+- **`pubspec.yaml` / `pubspec.lock`**: Added `flutter_foreground_task`, `workmanager`, `flutter_local_notifications` and transitive dependencies; app version bumped to `2.1.0+6`.
+- **`.gitignore`**: Added ignores for `workflow*.md` and `trash/*`.
+- **`about_page.dart`**: Version label updated to `2.1.0`.
+
+### Fixed
+
+- Redirected Pinterest URLs with extra segments/query params (e.g. `/sent/`, invite params) are now normalized correctly.
+- Continue-mode completion logic no longer misclassifies completion when switching media types.
+- Interrupted extraction/download sessions now preserve recoverable progress state via persisted task metadata.
+
 ## [2.0.0] - 2026-02-11
 
 ### Added
