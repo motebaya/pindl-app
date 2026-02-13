@@ -144,11 +144,11 @@ https://github.com/user-attachments/assets/b53d0c96-c6c9-46fb-bdcb-a8201d41c49a
 1. **Enter Same Username** - Type the username from interrupted session
 2. **Enable Continue Mode** - Check "Continue" checkbox
 3. **Metadata Loaded** - App loads previous session data
-4. **Previous Stats Shown** - Displays: "X downloaded, Y skipped, Z failed"
+4. **Total Progress Shown** - Displays accumulated totals: "X downloaded, Y skipped, Z failed"
 5. **Interrupted Warning** - Yellow badge: "Previous session was interrupted"
-6. **Remaining Count** - Shows only remaining items to download
+6. **Remaining Count** - Shows only remaining items to download (based on media type)
 7. **Continue Download** - Button changes to "Continue Download"
-8. **Resume** - Downloads only the remaining items
+8. **Resume** - Downloads resume directly from `last_index_downloaded` (no re-checking)
 
 ### Continue Mode States:
 
@@ -161,9 +161,93 @@ https://github.com/user-attachments/assets/b53d0c96-c6c9-46fb-bdcb-a8201d41c49a
 ### How Continue Mode Works:
 
 1. **Metadata Required** - "Save metadata" must have been enabled in previous session
-2. **Tracks Progress** - Each downloaded/skipped/failed item is recorded
-3. **Filters Remaining** - Only items not yet processed are queued
-4. **Preserves Stats** - Previous session counts shown for reference
+2. **Tracks Progress** - Each downloaded/skipped/failed item is recorded and accumulated across sessions
+3. **Per-Media-Type** - Remaining items calculated per media type (image vs video); switching types shows full count for the new type
+4. **Skips Directly** - Download queue starts from `last_index_downloaded + 1`, no re-checking from index 0
+5. **Accumulated Stats** - `success_downloaded` accumulates across sessions (e.g., session 1: 100, session 2: +200 = 300 total)
+6. **Overwrite Bypass** - If "Overwrite" is enabled, the download button re-enables even for fully downloaded types
+
+---
+
+## 7. Extraction Progress Notification
+
+<!-- TODO: Replace with actual screenshot/video -->
+<img width="540" height="651" alt="extract_progress" src="https://github.com/user-attachments/assets/e8bbc84f-322c-4a05-8010-74246cd82462" />
+
+When the app is running in the background during username extraction, a notification appears showing real-time progress:
+
+### Notification Details:
+
+| Property       | Value                                               |
+| -------------- | --------------------------------------------------- |
+| **Channel**    | Download Progress (silent, no sound)                |
+| **Style**      | Ongoing with indeterminate/determinate progress bar |
+| **Title**      | `Extracting: @username`                             |
+| **Body**       | `collecting items: 245, pages: 5/50`                |
+| **Status bar** | Download arrow icon (monochrome)                    |
+| **Importance** | LOW (no sound, no heads-up popup)                   |
+
+### Behavior:
+
+- Notification appears only when app is in the background
+- Progress bar updates as pages are extracted
+- Notification is automatically cleared when app returns to foreground
+- If extraction completes while backgrounded, switches to completion notification
+
+---
+
+## 8. Download Progress Notification
+
+<img width="540" height="635" alt="download_progress" src="https://github.com/user-attachments/assets/c2acc094-b85b-451d-89cf-cf3fa86c86cb" />
+
+During media downloads in the background, a progress notification shows byte-level download progress:
+
+### Notification Details:
+
+| Property       | Value                                          |
+| -------------- | ---------------------------------------------- |
+| **Channel**    | Download Progress (silent, no sound)           |
+| **Style**      | Ongoing with determinate progress bar (0-100%) |
+| **Title**      | `Downloading (3/47): {pin_id}.jpg`             |
+| **Body**       | `success: 2, skipped: 0, failed: 0`            |
+| **Status bar** | Download arrow icon (monochrome)               |
+| **Importance** | LOW (no sound, no heads-up popup)              |
+
+### Behavior:
+
+- Progress bar reflects byte-level download progress for the current file
+- Title updates with each new file in the queue
+- Body shows running totals of downloaded/skipped/failed items
+- Foreground service keeps the app alive during long downloads
+- Notification is automatically cleared when app returns to foreground
+
+---
+
+## 9. Completion Notification
+
+ <img width="540" height="370" alt="notification_comlete" src="https://github.com/user-attachments/assets/46564def-2fb5-4ac1-8143-0fdbbef3b99b" />
+
+When extraction or download completes while the app is in the background, a heads-up notification appears:
+
+### Notification Details:
+
+| Property       | Value                                        |
+| -------------- | -------------------------------------------- |
+| **Channel**    | Task Completed (with sound)                  |
+| **Style**      | Heads-up popup, auto-cancel on tap           |
+| **Title**      | `Extraction Complete` or `Download Complete` |
+| **Body**       | `Extraction completed in 3m 12s` or similar  |
+| **Sound**      | Default system notification sound            |
+| **Importance** | HIGH (heads-up popup, sound, vibration)      |
+
+### Behavior:
+
+- Only shown when the app is in the background
+- Plays the default system notification sound
+- Vibrates the device
+- Auto-cancels when the user taps it
+- Automatically cleared when the user opens the app
+- Duration is calculated from when the task started to when it finished
 
 ---
 
