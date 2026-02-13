@@ -1,7 +1,7 @@
 name: pindl
 description: "Pinterest Downloader - Personal Use Utility"
 publish_to: 'none'
-version: 2.0.0+5
+version: 2.1.0+6
 
 environment:
   sdk: ^3.10.8
@@ -38,6 +38,11 @@ dependencies:
   
   # URL Launcher
   url_launcher: ^6.2.4
+  
+  # Background Execution
+  flutter_foreground_task: ^9.2.0
+  workmanager: ^0.6.0
+  flutter_local_notifications: ^18.0.1
   
   # Utilities
   intl: ^0.18.1
