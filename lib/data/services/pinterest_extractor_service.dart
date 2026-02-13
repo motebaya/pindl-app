@@ -99,7 +99,7 @@ class PinterestExtractorService {
       final config = PinterestParser.parseConfig(response.data!);
       if (config == null) {
         throw ExtractionException(
-            'Could not extract config from profile page');
+            'Could not extract config from profile page, Make sure you enter the correct username and it is publicly visible.');
       }
 
       _config = config;
@@ -513,8 +513,11 @@ class PinterestExtractorService {
     }
   }
 
-  /// Resolve short pin.it URL to full Pinterest URL
-  Future<PinUrlInfo> _resolveShortUrl(
+  /// Resolve short pin.it URL to the final redirect URL (raw, uncleaned).
+  ///
+  /// Returns the raw redirected URL string. Caller is responsible for cleaning
+  /// via [PinUrlValidator.cleanRedirectedUrl].
+  Future<String> resolveShortUrl(
       String shortUrl, CancelToken? cancelToken) async {
     try {
       final response = await _dio.get<String>(
@@ -526,16 +529,7 @@ class PinterestExtractorService {
         cancelToken: cancelToken,
       );
 
-      // Get the final URL after redirects
-      final finalUrl = response.realUri.toString();
-      final parsed = PinUrlValidator.parse(finalUrl);
-
-      if (parsed == null) {
-        throw ValidationException(
-            'Could not parse redirected URL: $finalUrl');
-      }
-
-      return parsed;
+      return response.realUri.toString();
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
         throw CancelledException();
@@ -546,6 +540,28 @@ class PinterestExtractorService {
         originalError: e,
       );
     }
+  }
+
+  /// Resolve short pin.it URL to full Pinterest pin URL (legacy internal use).
+  /// For pin URLs only — throws if resolved URL is not a pin.
+  Future<PinUrlInfo> _resolveShortUrl(
+      String shortUrl, CancelToken? cancelToken) async {
+    final finalUrl = await resolveShortUrl(shortUrl, cancelToken);
+    
+    // Try cleaning first (handles /sent/ and query params)
+    final cleaned = PinUrlValidator.cleanRedirectedUrl(finalUrl);
+    if (cleaned != null && cleaned.type == 'pin') {
+      final parsed = PinUrlValidator.parse(cleaned.value);
+      if (parsed != null) return parsed;
+    }
+    
+    // Fallback: try direct parse
+    final parsed = PinUrlValidator.parse(finalUrl);
+    if (parsed == null) {
+      throw ValidationException(
+          'Could not parse redirected URL: $finalUrl');
+    }
+    return parsed;
   }
 
   /// Clear cookies (useful for fresh session)
