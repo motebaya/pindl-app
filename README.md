@@ -110,7 +110,7 @@ flowchart TD
 | Cross-session progress accumulation  | ✅     |
 | Per-media-type continue mode         | ✅     |
 | Task state persistence (Hive)        | ✅     |
-| Crash recovery (WorkManager)         | ✅     |
+| Crash recovery (resume prompt at next launch) | ✅     |
 | Metadata saving (JSON)               | ✅     |
 | Skip existing files                  | ✅     |
 | Overwrite mode                       | ✅     |
@@ -139,7 +139,7 @@ lib/
 │   ├── pages/              # UI screens (Home, History, About, etc.)
 │   ├── providers/          # Riverpod state management + foreground service manager
 │   └── widgets/            # Reusable Soft UI widgets
-└── main.dart               # App entry point (Hive + WorkManager init)
+└── main.dart               # App entry point (Hive init)
 
 android/
 ├── app/

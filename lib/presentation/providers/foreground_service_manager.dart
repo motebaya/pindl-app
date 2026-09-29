@@ -4,7 +4,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:workmanager/workmanager.dart';
 import '../../data/services/task_state_persistence.dart';
 import '../../data/services/notification_helper.dart';
 import '../../data/services/download_service.dart';
@@ -357,20 +356,14 @@ class PinDLTaskHandler extends TaskHandler {
       '[PinDLTaskHandler] Service destroyed at $timestamp, isTimeout=$isTimeout',
     );
 
+    // Phase 05 (Option B, D-27): no WorkManager recovery scheduling. The old
+    // call registered a one-off task whose dispatcher was a no-op — a fake
+    // promise. On timeout the task state stays 'active' in Hive; the next app
+    // open shows the honest resume dialog (_checkInterruptedTasks). If a real
+    // background recovery is ever built (Option A), it must be implemented
+    // AND instrument-verified first (D-27 evidence gate).
     if (isTimeout) {
-      debugPrint('[PinDLTaskHandler] Timeout detected — scheduling WorkManager recovery');
-      try {
-        await Workmanager().registerOneOffTask(
-          'pindl_recovery_${DateTime.now().millisecondsSinceEpoch}',
-          'pindl_background_recovery',
-          constraints: Constraints(
-            networkType: NetworkType.connected,
-          ),
-          initialDelay: const Duration(seconds: 5),
-        );
-      } catch (e) {
-        debugPrint('[PinDLTaskHandler] Failed to schedule WorkManager: $e');
-      }
+      debugPrint('[PinDLTaskHandler] Timeout — recovery happens via resume prompt at next app open');
     }
   }
 }

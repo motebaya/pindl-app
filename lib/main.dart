@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:workmanager/workmanager.dart';
 import 'core/theme/app_theme.dart';
 import 'data/models/background_task_state.dart';
 import 'data/services/task_state_persistence.dart';
@@ -12,18 +11,13 @@ import 'presentation/providers/history_provider.dart';
 import 'presentation/providers/settings_provider.dart';
 import 'presentation/providers/theme_provider.dart';
 
-/// WorkManager callback dispatcher — must be a top-level function.
-/// Handles recovery tasks scheduled when foreground service is killed.
-@pragma('vm:entry-point')
-void callbackDispatcher() {
-  Workmanager().executeTask((task, inputData) async {
-    // Currently a placeholder — the WorkManager recovery logic
-    // (re-reading Hive state and restarting foreground service)
-    // will be fully implemented when Android 15 timeout handling is needed.
-    debugPrint('[WorkManager] Executing task: $task');
-    return true;
-  });
-}
+// Phase 05 (BG-1/DD-2/OQ-3 decision gate — Option B, D-27): the pretend
+// WorkManager recovery machinery was REMOVED, not implemented. The no-op
+// dispatcher advertised recovery that did not exist (P4 violation). Real
+// interruption recovery is the metadata/Hive resume prompt at next app open
+// (_checkInterruptedTasks) — honest by construction. Option A (a real
+// background-isolate recovery notification) remains a documented future
+// candidate requiring instrumented OEM evidence before landing.
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -40,12 +34,6 @@ void main() async {
 
     // Initialize SharedPreferences (uses platform channel)
     final prefs = await SharedPreferences.getInstance();
-
-    // Initialize WorkManager for background recovery
-    await Workmanager().initialize(
-      callbackDispatcher,
-      isInDebugMode: false,
-    );
 
     // Set preferred orientations
     await SystemChrome.setPreferredOrientations([

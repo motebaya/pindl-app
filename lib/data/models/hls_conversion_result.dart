@@ -9,11 +9,16 @@ class HlsConversionResult {
   final int? fileSize;
   final String? errorMessage;
 
+  /// Phase 05 (HLS-5 / truth table): the FFmpeg session was cancelled by the
+  /// user — the item is INCOMPLETE (re-offered on continue), never "failed".
+  final bool wasCancelled;
+
   HlsConversionResult._({
     required this.success,
     this.outputPath,
     this.fileSize,
     this.errorMessage,
+    this.wasCancelled = false,
   });
 
   factory HlsConversionResult.success({
@@ -34,11 +39,20 @@ class HlsConversionResult {
     );
   }
 
+  factory HlsConversionResult.cancelled() {
+    return HlsConversionResult._(
+      success: false,
+      wasCancelled: true,
+      errorMessage: 'Conversion cancelled by user',
+    );
+  }
+
   @override
   String toString() {
     if (success) {
       return 'HlsConversionResult(success, path: $outputPath, size: $fileSize)';
     }
+    if (wasCancelled) return 'HlsConversionResult(cancelled)';
     return 'HlsConversionResult(error: $errorMessage)';
   }
 }

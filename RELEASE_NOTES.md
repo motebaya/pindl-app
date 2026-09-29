@@ -31,7 +31,7 @@ Not sure? Choose **arm64-v8a**.
 ### What’s New
 
 - Added background task state persistence (`BackgroundTaskState` + Hive) with resume/discard prompt on next launch.
-- Added lifecycle-aware foreground service management with WorkManager timeout-recovery scheduling.
+- Added lifecycle-aware foreground service management.
 - Added robust `pin.it` redirect cleanup to resolve canonical pin URLs or usernames before extraction.
 - Added deterministic filename generation (`<pinId>_image`, `<pinId>_thumbnail`, `<pinId>_video`) for predictable outputs.
 - Added GitHub Actions workflow for automatic build, tag, and APK release on `main` pushes.

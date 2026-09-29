@@ -1186,9 +1186,16 @@ class JobNotifier extends StateNotifier<AppJobState> {
                 print('[FFmpeg] $log');
               }
             },
+            cancelToken: _downloadCancelToken,
           );
           
           if (!conversionResult.success) {
+            if (conversionResult.wasCancelled) {
+              // Phase 05 truth table: cancelled = INCOMPLETE (re-offered on
+              // continue) — never counted failed, no history entry.
+              _logService.interrupted('HLS conversion cancelled: ${item.pinId}');
+              continue;
+            }
             throw Exception('FFmpeg conversion failed: ${conversionResult.errorMessage}');
           }
           
@@ -1234,85 +1241,24 @@ class JobNotifier extends StateNotifier<AppJobState> {
         }
       }
     } else {
-      // ── Lite build: fallback to single-pin extraction for direct MP4 ──
+      // ── Lite build: HLS conversion unsupported — honest skip (HLS-4/05.5).
+      // The old "fallback" re-fetched the pin page for a direct MP4 the feed
+      // already proved absent — a guaranteed failure after a wasted request.
+      // Now: skip upfront with an explicit reason; explicit skip = complete
+      // per the truth table (in the set; not re-offered on continue).
+      if (hlsItems.isNotEmpty) {
+        _logService.queue(
+            '${hlsItems.length} HLS video(s) skipped — require the FFmpeg build');
+      }
       for (var i = 0; i < hlsItems.length; i++) {
         if (_downloadCancelToken?.isCancelled ?? false) break;
-        
         final item = hlsItems[i];
-        final outputFilename = FormatUtils.pinFilename(pinId: item.pinId, role: 'video', url: item.url);
-        pinUrlMap[item.pinId] = (item.url, outputFilename);
-        
-        _logService.downloading('Lite mode: fetching direct video for ${item.pinId}...');
-        
-        try {
-          // Step 1: Check if output file already exists (skip if overwrite is false)
-          if (!overwrite) {
-            final exists = await _downloadService.fileExistsInDownloads(outputFilename, videosFolder);
-            if (exists) {
-              _logService.skipped('Skipped ${item.pinId}: File exists');
-              sessionCompleted.add(startIndex + regularItems.length + i);
-
-              state = state.copyWith(
-                skippedCount: state.skippedCount + 1,
-                currentIndex: state.currentIndex + 1,
-              );
-              continue;
-            }
-          }
-          
-          // Step 2: Use single-pin extraction to attempt direct MP4 retrieval
-          // Construct pin URL from pinId and call getPinVideo -> parseVideoData
-          final pinUrl = 'https://www.pinterest.com/pin/${item.pinId}/';
-          final mediaResult = await _extractor.getPinVideo(
-            pinIdOrUrl: pinUrl,
-            cancelToken: _downloadCancelToken,
-          );
-          
-          if (mediaResult.videoUrl != null) {
-            // Direct MP4 found — always use deterministic filename
-            await _downloadService.downloadFile(
-              url: mediaResult.videoUrl!,
-              outputPath: outputPath,
-              filename: outputFilename,
-              pinId: item.pinId,
-              overwrite: overwrite,
-              subFolder: videosFolder,
-            );
-            
-            _logService.saved('Saved: $outputFilename');
-            sessionCompleted.add(startIndex + regularItems.length + i);
-
-            state = state.copyWith(
-              downloadedCount: state.downloadedCount + 1,
-              currentIndex: state.currentIndex + 1,
-            );
-            
-            _onDownloadComplete?.call(
-              filename: outputFilename,
-              url: mediaResult.videoUrl!,
-              status: HistoryStatus.success,
-            );
-          } else {
-            // No direct video URL available from single-pin extraction
-            throw Exception(
-              'Failed to fetch direct video URL. Please use the FFmpeg build to download this video.',
-            );
-          }
-        } catch (e) {
-          _logService.error('Failed ${item.pinId}: $e');
-
-          state = state.copyWith(
-            failedCount: state.failedCount + 1,
-            currentIndex: state.currentIndex + 1,
-          );
-          
-          _onDownloadComplete?.call(
-            filename: outputFilename,
-            url: item.url,
-            status: HistoryStatus.failed,
-            errorMessage: userMessage(e),
-          );
-        }
+        _logService.skipped('Skipped ${item.pinId}: HLS video — requires FFmpeg build');
+        sessionCompleted.add(startIndex + regularItems.length + i);
+        state = state.copyWith(
+          skippedCount: state.skippedCount + 1,
+          currentIndex: state.currentIndex + 1,
+        );
       }
     }
     
