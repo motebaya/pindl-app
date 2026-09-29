@@ -20,6 +20,7 @@ import '../../data/services/log_service.dart';
 import '../../data/services/pinterest_extractor_service.dart';
 import '../../data/services/task_state_persistence.dart';
 import '../../data/models/background_task_state.dart';
+import '../utils/error_messages.dart';
 import 'history_provider.dart';
 import 'log_provider.dart';
 import 'foreground_service_manager.dart';
@@ -336,7 +337,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
         _logService.error('Failed to resolve short URL: $e');
         state = state.copyWith(
           status: JobStatus.failed,
-          error: 'Failed to resolve short URL: $e',
+          error: userMessage(e),
         );
         return;
       }
@@ -377,7 +378,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
       _logService.error('Failed to load info: $e');
       state = state.copyWith(
         status: JobStatus.failed,
-        error: e.toString(),
+        error: userMessage(e),
       );
     }
   }
@@ -708,7 +709,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
       _logService.error('Download failed: $e');
       state = state.copyWith(
         status: JobStatus.failed,
-        error: e.toString(),
+        error: userMessage(e),
       );
     }
   }
@@ -772,7 +773,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
             filename: filename,
             url: imageUrl,
             status: HistoryStatus.failed,
-            errorMessage: e.toString(),
+            errorMessage: userMessage(e),
           );
         }
       }
@@ -824,7 +825,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
             filename: filename,
             url: videoUrl,
             status: HistoryStatus.failed,
-            errorMessage: e.toString(),
+            errorMessage: userMessage(e),
           );
         }
       }
@@ -1188,7 +1189,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
             filename: outputFilename,
             url: item.url,
             status: HistoryStatus.failed,
-            errorMessage: e.toString(),
+            errorMessage: userMessage(e),
           );
         }
       }
@@ -1267,7 +1268,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
             filename: outputFilename,
             url: item.url,
             status: HistoryStatus.failed,
-            errorMessage: e.toString(),
+            errorMessage: userMessage(e),
           );
         }
       }

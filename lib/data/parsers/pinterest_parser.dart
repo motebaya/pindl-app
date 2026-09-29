@@ -7,6 +7,32 @@ import '../models/user_pins_result.dart';
 
 // PORTED from my Node.js CLI tool
 // - https://github.com/motebaya/pinterest-js
+
+/// Classified outcome for single-pin parsing (Phase 03 typed errors).
+/// [result] non-null = success; otherwise exactly one failure class is set:
+/// [pinNotFound] (relay record carries a PinNotFound error object) or
+/// [sourceChanged] (page has no relay record at all).
+class PinParseOutcome {
+  final MediaResult? result;
+  final bool pinNotFound;
+  final bool sourceChanged;
+
+  const PinParseOutcome.media(this.result)
+      : pinNotFound = false,
+        sourceChanged = false;
+  const PinParseOutcome.notFound()
+      : result = null,
+        pinNotFound = true,
+        sourceChanged = false;
+  const PinParseOutcome.changed()
+      : result = null,
+        pinNotFound = false,
+        sourceChanged = true;
+
+  bool get isPinNotFound => pinNotFound;
+  bool get isSourceChanged => sourceChanged;
+}
+
 class PinterestParser {
   PinterestParser._();
   
@@ -281,6 +307,56 @@ class PinterestParser {
       );
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Classified single-pin parsing (Phase 03 / extraction plan 01):
+  /// distinguishes "no relay payload at all" (SourceChanged) and
+  /// "PinNotFound error record" from a plain media-less record.
+  /// The legacy null-returning methods above are unchanged (Phase 02 pins).
+  static PinParseOutcome parseImageDataOrNull(String html, String pinId) =>
+      _classify(html, () => parseImageData(html, pinId));
+
+  static PinParseOutcome parseVideoDataOrNull(String html, String pinId) =>
+      _classify(html, () => parseVideoData(html, pinId));
+
+  static PinParseOutcome parseMediaDataOrNull(String html, String pinId) =>
+      _classify(html, () => parseMediaData(html, pinId));
+
+  static PinParseOutcome _classify(
+      String html, MediaResult? Function() parse) {
+    if (!_mediaDataPattern.hasMatch(html)) {
+      return const PinParseOutcome.changed();
+    }
+    if (_recordIsPinNotFound(html)) {
+      return const PinParseOutcome.notFound();
+    }
+    return PinParseOutcome.media(parse());
+  }
+
+  /// Shape check of the FIRST relay record for a PinNotFound error object
+  /// (JS parity: error-shaped records with __isError/PIN_NOT_FOUND).
+  static bool _recordIsPinNotFound(String html) {
+    final match = _mediaDataPattern.firstMatch(html);
+    if (match == null) return false;
+    try {
+      final jsonStr = match.namedGroup('json');
+      if (jsonStr == null) return false;
+      final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+      final dataWrapper = json['data'] as Map<String, dynamic>?;
+      if (dataWrapper == null || dataWrapper.isEmpty) return false;
+      final record = dataWrapper[dataWrapper.keys.first];
+      if (record is! Map<String, dynamic>) return false;
+      final error = record['error'];
+      if (error is Map<String, dynamic>) {
+        final code = error['code']?.toString().toUpperCase();
+        if (code == 'PIN_NOT_FOUND') return true;
+        final message = error['message']?.toString().toLowerCase() ?? '';
+        if (message.contains('not found')) return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
     }
   }
 

@@ -20,6 +20,23 @@ class ParseException extends PinterestException {
   ParseException(super.message, {super.code, super.originalError});
 }
 
+/// Exception when the requested pin does not exist (deleted / never existed).
+/// Extends [ParseException] so existing catch sites keep working (plan 01).
+class PinNotFoundException extends ParseException {
+  PinNotFoundException(super.message, {super.code, super.originalError});
+}
+
+/// Exception when a pin exists but carries no downloadable media.
+class NoMediaException extends ParseException {
+  NoMediaException(super.message, {super.code, super.originalError});
+}
+
+/// Exception when the Pinterest page structure no longer matches the parser
+/// (relay payload missing entirely) — the app likely needs an update.
+class SourceChangedException extends ParseException {
+  SourceChangedException(super.message, {super.code, super.originalError});
+}
+
 /// Exception when network request fails
 class NetworkException extends PinterestException {
   final int? statusCode;
@@ -45,6 +62,5 @@ class DownloadException extends PinterestException {
 
 /// Exception when user cancels an operation
 class CancelledException extends PinterestException {
-  CancelledException([String message = 'Operation cancelled by user'])
-      : super(message);
+  CancelledException([super.message = 'Operation cancelled by user']);
 }

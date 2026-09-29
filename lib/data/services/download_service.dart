@@ -6,8 +6,12 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../../core/constants/pinterest_constants.dart';
 import '../../core/exceptions/pinterest_exception.dart';
+import '../../core/network/media_hosts.dart';
+import '../../core/network/retry.dart';
 import '../../core/utils/format_utils.dart';
+import '../../core/validation/media_validator.dart';
 import '../models/download_task.dart';
+import 'log_service.dart';
 
 /// Callback for download progress
 typedef DownloadProgressCallback = void Function(
@@ -39,7 +43,8 @@ typedef DownloadStatusCallback = void Function(
 class DownloadService {
   final Dio _dio;
   final int maxConcurrent;
-  
+  final LogService? _logService;
+
   // Method channel for MediaScanner
   static const _mediaChannel = MethodChannel('com.motebaya.pindl/media');
 
@@ -59,7 +64,13 @@ class DownloadService {
   DownloadService({
     Dio? dio,
     this.maxConcurrent = 3,
-  }) : _dio = dio ?? _createDio();
+    LogService? logService,
+  })  : _logService = logService,
+        _dio = dio ?? _createDio();
+
+  /// Retry telemetry to the console panel (extraction/03 step 4); console
+  /// panel (not print) keeps the analyzer print baseline unchanged.
+  void _logRetry(String message) => _logService?.fetch('retry: $message');
 
   static Dio _createDio() {
     return Dio(BaseOptions(
@@ -380,6 +391,16 @@ class DownloadService {
     _activeTokens[task.pinId] = cancelToken;
 
     try {
+      // SEC-2: media-host allowlist (boundary matching, canonical D-08).
+      // Fail-closed: a non-allowlisted host is never fetched, never imported.
+      // (Inside try so the finally bookkeeping below always runs.) The host
+      // rides in the reason string so console/history record it for the
+      // one-line allowlist addition (security/02 escape hatch).
+      if (!MediaHosts.isAllowed(task.url)) {
+        final host = Uri.tryParse(task.url)?.host ?? task.url;
+        onFailed(task.pinId, '${MediaHosts.rejectionReason}: $host');
+        return;
+      }
       // Check if file already exists in Downloads (skip if overwrite is false)
       if (!overwrite) {
         final exists = await _fileExistsInDownloads(task.filename, subFolder);
@@ -404,28 +425,51 @@ class DownloadService {
         await tempFile.delete();
       }
 
-      // Download to .part file in temp directory
-      await _dio.download(
-        task.url,
-        partPath,
+      // Download to .part file in temp directory (D-03 bounded retries —
+      // re-fetch only; validation below runs once, after the final attempt).
+      await retry(
+        () => _dio.download(
+          task.url,
+          partPath,
+          cancelToken: cancelToken,
+          onReceiveProgress: (received, total) {
+            if (total > 0) {
+              _progressController.add(DownloadProgress(
+                pinId: task.pinId,
+                title: task.title,
+                received: received,
+                total: total,
+                currentIndex: currentIndex,
+                totalItems: totalItems,
+              ));
+            }
+          },
+        ),
         cancelToken: cancelToken,
-        onReceiveProgress: (received, total) {
-          if (total > 0) {
-            _progressController.add(DownloadProgress(
-              pinId: task.pinId,
-              title: task.title,
-              received: received,
-              total: total,
-              currentIndex: currentIndex,
-              totalItems: totalItems,
-            ));
-          }
-        },
+        onLog: _logRetry,
       );
 
       // Rename .part to temp final
       await File(partPath).rename(tempPath);
-      
+
+      // DL-2/SEC-4: fail-closed content validation before anything is
+      // imported or counted complete. Corrupt/mismatched bodies become a
+      // FAILED item with a diagnosable reason — never a false success.
+      final verdict = await MediaValidator.validateFile(
+        tempPath,
+        expect: _expectationFor(task.filename),
+      );
+      if (!verdict.ok) {
+        _logRetry('validation failed for ${task.filename}: ${verdict.reason}');
+        try {
+          await File(tempPath).delete();
+        } catch (_) {}
+        throw DownloadException(
+          'validation failed: ${verdict.reason}',
+          filePath: tempPath,
+        );
+      }
+
       // Save to public Downloads via MediaStore (deletes temp file internally)
       // Pass overwrite flag to control whether existing file should be replaced
       final publicPath = await _saveToPublicDownloads(tempPath, task.filename, subFolder, overwrite: overwrite);
@@ -465,6 +509,28 @@ class DownloadService {
     }
   }
 
+  /// Infer the expected media super-type from the filename extension.
+  /// null = no expectation (signature still required for image-named files).
+  static MediaExpectation? _expectationFor(String filename) {
+    final ext = filename.split('.').last.toLowerCase();
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg':
+      case 'png':
+      case 'gif':
+      case 'webp':
+      case 'bmp':
+        return MediaExpectation.image;
+      case 'mp4':
+      case 'webm':
+      case 'mov':
+      case 'm4v':
+        return MediaExpectation.video;
+      default:
+        return null;
+    }
+  }
+
   /// Download a single file
   /// Returns the public path where file was saved (or null if fallback)
   /// Throws DownloadException with 'File already exists' if overwrite is false and file exists
@@ -479,7 +545,13 @@ class DownloadService {
     void Function(int received, int total)? onProgress,
   }) async {
     final safeFilename = FormatUtils.sanitizeFilename(filename);
-    
+
+    // SEC-2: media-host allowlist (boundary matching, canonical D-08).
+    if (!MediaHosts.isAllowed(url)) {
+      final host = Uri.tryParse(url)?.host ?? url;
+      throw DownloadException('${MediaHosts.rejectionReason}: $host');
+    }
+
     // Check if file already exists in Downloads (skip if overwrite is false)
     if (!overwrite) {
       final exists = await _fileExistsInDownloads(safeFilename, subFolder);
@@ -507,16 +579,34 @@ class DownloadService {
     }
 
     try {
-      await _dio.download(
-        url,
-        partPath,
-        cancelToken: cancelToken,
-        onReceiveProgress: onProgress,
+      await retry(
+        () => _dio.download(
+          url,
+          partPath,
+          cancelToken: cancelToken,
+          onReceiveProgress: onProgress,
+        ),
+        onLog: _logRetry,
       );
 
       // Rename .part to temp final
       await File(partPath).rename(tempPath);
-      
+
+      // DL-2/SEC-4: fail-closed content validation before public save.
+      final verdict = await MediaValidator.validateFile(
+        tempPath,
+        expect: _expectationFor(safeFilename),
+      );
+      if (!verdict.ok) {
+        try {
+          await File(tempPath).delete();
+        } catch (_) {}
+        throw DownloadException(
+          'validation failed: ${verdict.reason}',
+          filePath: tempPath,
+        );
+      }
+
       // Save to public Downloads via MediaStore (deletes temp file internally)
       // For single file download, always use overwrite mode (existence check already done)
       final publicPath = await _saveToPublicDownloads(tempPath, safeFilename, subFolder, overwrite: overwrite);

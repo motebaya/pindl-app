@@ -5,6 +5,8 @@ import 'package:dio/dio.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import '../../core/constants/pinterest_constants.dart';
 import '../../core/exceptions/pinterest_exception.dart';
+import '../../core/network/media_hosts.dart';
+import '../../core/network/retry.dart';
 import '../../core/utils/pin_url_validator.dart';
 import '../../core/utils/trace_id_generator.dart';
 import '../models/author.dart';
@@ -13,6 +15,7 @@ import '../models/pin_item.dart';
 import '../models/pinterest_config.dart';
 import '../models/user_pins_result.dart';
 import '../parsers/pinterest_parser.dart';
+import 'log_service.dart';
 
 /// Pinterest extraction service
 /// Ported from Node.js Pinterest.js
@@ -20,7 +23,8 @@ class PinterestExtractorService {
   final Dio _dio;
   bool verbose;
   final CookieJar _cookieJar;
-  
+  final LogService? _logService;
+
   /// Default max pages (can be overridden per request)
   static const int defaultMaxPages = 50;
 
@@ -29,10 +33,23 @@ class PinterestExtractorService {
   PinterestExtractorService({
     Dio? dio,
     this.verbose = false,
+    LogService? logService,
   })  : _cookieJar = CookieJar(),
+        _logService = logService,
         _dio = dio ?? Dio() {
     _initializeDio();
   }
+
+  /// Console-panel telemetry (retry lines land in the LogService console
+  /// per extraction/03 step 4; LogService-only keeps the analyzer print
+  /// baseline unchanged).
+  void _logFetch(String message) {
+    _logService?.fetch(message);
+  }
+
+  /// Username of the currently cached config, if any.
+  String? get cachedUsername => _cachedUsername;
+  String? _cachedUsername;
 
   void _initializeDio() {
     _dio.options = BaseOptions(
@@ -87,9 +104,13 @@ class PinterestExtractorService {
     CancelToken? cancelToken,
   }) async {
     try {
-      final response = await _dio.get<String>(
-        '/$username',
+      final response = await retry(
+        () => _dio.get<String>(
+          '/$username',
+          cancelToken: cancelToken,
+        ),
         cancelToken: cancelToken,
+        onLog: _logFetch,
       );
 
       if (response.data == null) {
@@ -103,10 +124,11 @@ class PinterestExtractorService {
       }
 
       _config = config;
-      
+      _cachedUsername = username;
+
       print('[INFO] appversion::${config.appVersion}');
       print('[INFO] userid::${config.userId}');
-      
+
       return config;
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
@@ -133,8 +155,14 @@ class PinterestExtractorService {
     // Clamp maxPages to valid range
     final effectiveMaxPages = maxPages.clamp(1, 100);
     
-    // Get config if not already fetched
-    if (_config == null) {
+    // Get config if not already fetched — or if it belongs to a DIFFERENT
+    // username. PAR-X1 fix (plan extraction/04, option 2): the service owns
+    // its cache invariant, so a user switch (A then B in one session) refetches
+    // config with B's identity instead of silently reusing A's userId.
+    if (_config == null || _cachedUsername != username) {
+      if (_cachedUsername != null && _cachedUsername != username) {
+        _logFetch('session user switch: $_cachedUsername -> $username (refetching config)');
+      }
       await getConfigInfo(username: username, cancelToken: cancelToken);
     }
 
@@ -274,13 +302,17 @@ class PinterestExtractorService {
           '${PinterestConstants.userPinsResource}?source_url=$encodedSourceUrl&data=$encodedData&_=$timestamp';
 
       // Get response as String first
-      final response = await _dio.get<String>(
-        url,
-        options: Options(
-          headers: _getApiHeaders(sourceUrl),
-          responseType: ResponseType.plain,
+      final response = await retry(
+        () => _dio.get<String>(
+          url,
+          options: Options(
+            headers: _getApiHeaders(sourceUrl),
+            responseType: ResponseType.plain,
+          ),
+          cancelToken: cancelToken,
         ),
         cancelToken: cancelToken,
+        onLog: _logFetch,
       );
 
       if (response.data == null || response.data!.isEmpty) {
@@ -388,18 +420,29 @@ class PinterestExtractorService {
     }
 
     try {
-      final response = await _dio.get<String>(
-        pinUrl,
+      final response = await retry(
+        () => _dio.get<String>(pinUrl, cancelToken: cancelToken),
         cancelToken: cancelToken,
+        onLog: _logFetch,
       );
 
       if (response.data == null) {
         throw ExtractionException('Empty response from pin page');
       }
 
-      final result = PinterestParser.parseImageData(response.data!, pinId);
+      final outcome = PinterestParser.parseImageDataOrNull(response.data!, pinId);
+      if (outcome.isPinNotFound) {
+        throw PinNotFoundException('Pin not found: $pinId', code: 'E_PIN_NOT_FOUND');
+      }
+      if (outcome.isSourceChanged) {
+        throw SourceChangedException(
+          'No relay payload on pin page: $pinId',
+          code: 'E_NO_DATA',
+        );
+      }
+      final result = outcome.result;
       if (result == null) {
-        throw ParseException('No image found for pin: $pinId');
+        throw NoMediaException('No image found for pin: $pinId', code: 'E_NO_MEDIA');
       }
 
       return result;
@@ -437,18 +480,29 @@ class PinterestExtractorService {
     }
 
     try {
-      final response = await _dio.get<String>(
-        pinUrl,
+      final response = await retry(
+        () => _dio.get<String>(pinUrl, cancelToken: cancelToken),
         cancelToken: cancelToken,
+        onLog: _logFetch,
       );
 
       if (response.data == null) {
         throw ExtractionException('Empty response from pin page');
       }
 
-      final result = PinterestParser.parseVideoData(response.data!, pinId);
+      final outcome = PinterestParser.parseVideoDataOrNull(response.data!, pinId);
+      if (outcome.isPinNotFound) {
+        throw PinNotFoundException('Pin not found: $pinId', code: 'E_PIN_NOT_FOUND');
+      }
+      if (outcome.isSourceChanged) {
+        throw SourceChangedException(
+          'No relay payload on pin page: $pinId',
+          code: 'E_NO_DATA',
+        );
+      }
+      final result = outcome.result;
       if (result == null) {
-        throw ParseException('No video found for pin: $pinId');
+        throw NoMediaException('No video found for pin: $pinId', code: 'E_NO_MEDIA');
       }
 
       return result;
@@ -486,18 +540,29 @@ class PinterestExtractorService {
     }
 
     try {
-      final response = await _dio.get<String>(
-        pinUrl,
+      final response = await retry(
+        () => _dio.get<String>(pinUrl, cancelToken: cancelToken),
         cancelToken: cancelToken,
+        onLog: _logFetch,
       );
 
       if (response.data == null) {
         throw ExtractionException('Empty response from pin page');
       }
 
-      final result = PinterestParser.parseMediaData(response.data!, pinId);
+      final outcome = PinterestParser.parseMediaDataOrNull(response.data!, pinId);
+      if (outcome.isPinNotFound) {
+        throw PinNotFoundException('Pin not found: $pinId', code: 'E_PIN_NOT_FOUND');
+      }
+      if (outcome.isSourceChanged) {
+        throw SourceChangedException(
+          'No relay payload on pin page: $pinId',
+          code: 'E_NO_DATA',
+        );
+      }
+      final result = outcome.result;
       if (result == null) {
-        throw ParseException('No media found for pin: $pinId');
+        throw NoMediaException('No media found for pin: $pinId', code: 'E_NO_MEDIA');
       }
 
       return result;
@@ -529,7 +594,19 @@ class PinterestExtractorService {
         cancelToken: cancelToken,
       );
 
-      return response.realUri.toString();
+      final finalUrl = response.realUri.toString();
+
+      // SEC-2 (security/02): a resolved short URL must land in the
+      // pinterest/pin.it family. Fail-closed with a diagnosable message.
+      if (!MediaHosts.isAllowedRedirect(finalUrl)) {
+        final host = Uri.tryParse(finalUrl)?.host ?? finalUrl;
+        _logFetch('[SEC] unexpected redirect target host: $host');
+        throw ValidationException(
+          'Short URL redirected to an unexpected host: $host',
+        );
+      }
+
+      return finalUrl;
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
         throw CancelledException();
