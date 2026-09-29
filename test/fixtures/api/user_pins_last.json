@@ -1,0 +1,19 @@
+{
+  "resource_response": {
+    "status": "success",
+    "code": 0,
+    "message": "ok",
+    "data": [
+      {
+        "id": "444444444444444444",
+        "title": "Fixture Last Page Image",
+        "created_at": "Sun, 14 Dec 2025 10:00:00 +0000",
+        "images": {
+          "orig": { "url": "https://i.pinimg.com/originals/44/55/66/44556677889900112233445566778899.jpg" }
+        },
+        "videos": [],
+        "native_creator": { "id": "111222333444555666", "username": "fixtureuser", "full_name": "Fixture Author" }
+      }
+    ]
+  }
+}

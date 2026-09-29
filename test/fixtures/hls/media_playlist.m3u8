@@ -1,0 +1,14 @@
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXT-X-MEDIA-SEQUENCE:0
+#EXTINF:5.0,
+seg-0.ts
+#EXTINF:5.2,
+seg-1.ts
+#EXT-X-DISCONTINUITY
+#EXTINF:4.8,
+seg-2.ts
+#EXTINF:5.1,
+seg-3.ts
+## Intentionally NO endlist tag (live-truncated conversion source)

@@ -1,0 +1,58 @@
+{
+  "author": {
+    "username": "fixtureuser",
+    "name": "Fixture Author",
+    "userId": "111222333444555666"
+  },
+  "totalImages": 2,
+  "totalVideos": 1,
+  "bookmark": null,
+  "hasMore": false,
+  "pins": [
+    {
+      "pinId": "111111111111111111",
+      "title": "Fixture Image Pin",
+      "imageUrl": "https://i.pinimg.com/originals/aa/bb/cc/aabbcc11223344556677889900112233.jpg",
+      "videoUrl": null,
+      "thumbnail": null,
+      "uploadDate": "2025-12-11T04:04:36.000Z",
+      "hasImage": true,
+      "hasVideo": false
+    },
+    {
+      "pinId": "222222222222222222",
+      "title": "Fixture Video Pin (direct MP4)",
+      "imageUrl": "https://i.pinimg.com/originals/dd/ee/ff/ddeeff00112233445566778899aabbcc.jpg",
+      "videoUrl": {
+        "url": "https://v1.pinimg.com/videos/mc/720p/aa/bb/cc/abc123.mp4",
+        "thumbnail": "https://i.pinimg.com/videos/thumbnails/abc123.jpg",
+        "quality": "720P",
+        "needConvert": false
+      },
+      "thumbnail": "https://i.pinimg.com/videos/thumbnails/abc123.jpg",
+      "uploadDate": "2025-12-12T06:30:00.000Z",
+      "hasImage": true,
+      "hasVideo": true
+    },
+    {
+      "pinId": "333333333333333333",
+      "title": "Fixture Video Pin (HLS only)",
+      "imageUrl": "https://i.pinimg.com/originals/11/22/33/11223344556677889900112233445566.jpg",
+      "videoUrl": {
+        "url": "https://v.pinimg.com/videos/mc/hls/def456.m3u8",
+        "thumbnail": "https://i.pinimg.com/videos/thumbnails/def456.jpg",
+        "quality": "HLS",
+        "needConvert": true
+      },
+      "thumbnail": "https://i.pinimg.com/videos/thumbnails/def456.jpg",
+      "uploadDate": "2025-12-13T08:00:00.000Z",
+      "hasImage": true,
+      "hasVideo": true
+    }
+  ],
+  "success_downloaded": 2,
+  "skip_downloaded": 1,
+  "failed_downloaded": 0,
+  "last_index_downloaded": 2,
+  "was_interrupted": true
+}

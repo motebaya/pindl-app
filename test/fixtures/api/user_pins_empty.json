@@ -1,0 +1,9 @@
+{
+  "resource_response": {
+    "status": "success",
+    "code": 0,
+    "message": "ok",
+    "bookmark": "P9|0|fixture-bookmark-empty|0|0|0",
+    "data": []
+  }
+}

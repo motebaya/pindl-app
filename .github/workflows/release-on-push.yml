@@ -108,6 +108,10 @@ jobs:
         if: steps.tagcheck.outputs.exists == 'false'
         run: flutter pub get
 
+      - name: Flutter test (quality gate — Phase 02 / 02.6)
+        if: steps.tagcheck.outputs.exists == 'false'
+        run: flutter test
+
       - name: Build lite (split per ABI)
         if: steps.tagcheck.outputs.exists == 'false'
         run: flutter build apk --release --flavor lite --dart-define=ENABLE_FFMPEG=false --split-per-abi

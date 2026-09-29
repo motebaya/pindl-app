@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<!-- Fixture: single pin page, image-only pin. The relay line must satisfy
+     PinterestParser._mediaDataPattern. CAUTION: the lazy JSON capture means any
+     closing-brace-paren-semicolon sequence after a brace-open ends the match —
+     so this comment deliberately does NOT contain a sample relay call (a
+     commented example would itself match the regex and poison firstMatch). -->
+<html>
+<head><title>image pin</title></head>
+<body>
+  <script>
+    window.__PWS_RELAY_REGISTER_COMPLETED_REQUEST__("pinterestapp:PinPage:closeup:1", {"data":{"pin_closeup":{"data":{"entityId":"999888777666555444333222111000987654321","title":"Fixture Image Pin","imageLargeUrl":"https://i.pinimg.com/originals/aa/bb/cc/aabbcc11223344556677889900112233.jpg","pinner":{"username":"fixtureuser","entityId":"111222333444555666"},"closeupAttribution":{"fullName":"Fixture Author"}}}}});
+  </script>
+</body>
+</html>

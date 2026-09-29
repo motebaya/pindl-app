@@ -1,0 +1,49 @@
+{
+  "resource_response": {
+    "status": "success",
+    "code": 0,
+    "message": "ok",
+    "bookmark": "P9|0|fixture-bookmark-token|0|0|0",
+    "data": [
+      {
+        "id": "111111111111111111",
+        "title": "Fixture Image Pin",
+        "created_at": "Thu, 11 Dec 2025 04:04:36 +0000",
+        "images": {
+          "orig": { "url": "https://i.pinimg.com/originals/aa/bb/cc/aabbcc11223344556677889900112233.jpg", "width": 736, "height": 1104 }
+        },
+        "videos": [],
+        "native_creator": { "id": "111222333444555666", "username": "fixtureuser", "full_name": "Fixture Author" }
+      },
+      {
+        "id": "222222222222222222",
+        "title": "Fixture Video Pin (direct MP4)",
+        "created_at": "Fri, 12 Dec 2025 06:30:00 +0000",
+        "images": {
+          "orig": { "url": "https://i.pinimg.com/originals/dd/ee/ff/ddeeff00112233445566778899aabbcc.jpg", "width": 736, "height": 1104 }
+        },
+        "videos": {
+          "video_list": {
+            "V_720P": { "url": "https://v1.pinimg.com/videos/mc/720p/aa/bb/cc/abc123.mp4", "thumbnail": "https://i.pinimg.com/videos/thumbnails/abc123.jpg", "width": 1280, "height": 720 }
+          }
+        },
+        "native_creator": { "id": "111222333444555666", "username": "fixtureuser", "full_name": "Fixture Author" }
+      },
+      {
+        "id": "333333333333333333",
+        "title": "Fixture Video Pin (HLS only)",
+        "created_at": "Sat, 13 Dec 2025 08:00:00 +0000",
+        "images": {
+          "orig": { "url": "https://i.pinimg.com/originals/11/22/33/11223344556677889900112233445566.jpg", "width": 736, "height": 1104 }
+        },
+        "videos": {
+          "video_list": {
+            "V_HLSV3_MOBILE": { "url": "https://v.pinimg.com/videos/mc/hls/def456.m3u8", "thumbnail": "https://i.pinimg.com/videos/thumbnails/def456.jpg" },
+            "V_HLSV4": { "url": "https://v.pinimg.com/videos/mc/hls/def456v4.m3u8", "thumbnail": "https://i.pinimg.com/videos/thumbnails/def456.jpg" }
+          }
+        },
+        "native_creator": { "id": "111222333444555666", "username": "fixtureuser", "full_name": "Fixture Author" }
+      }
+    ]
+  }
+}

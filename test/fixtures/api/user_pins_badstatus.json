@@ -1,0 +1,8 @@
+{
+  "resource_response": {
+    "status": "fail",
+    "code": 12,
+    "message": "rate limit exceeded",
+    "data": []
+  }
+}

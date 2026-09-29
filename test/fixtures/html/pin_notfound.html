@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<!-- Fixture: pin page whose relay record carries a PinNotFound error object.
+     Static parity with JS pinterest-js PinNotFound shape (parity/extraction.md).
+     Current Flutter behavior: parseImageData/parseVideoData return null (typed-error
+     integration is Phase 03). These tests PIN current behavior. -->
+<html>
+<head><title>missing pin</title></head>
+<body>
+  <script>
+    window.__PWS_RELAY_REGISTER_COMPLETED_REQUEST__("pinterestapp:PinPage:closeup:3", {"data":{"pin_closeup":{"error":{"message":"Pin not found.","code":"PIN_NOT_FOUND","resource_response":{"status":"fail","code":404,"message":"Pin not found.","data":null}}}}});
+  </script>
+</body>
+</html>

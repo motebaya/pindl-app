@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<!-- Fixture: relay record present but media-less (no imageLargeUrl, no storyPinData video).
+     Richest-record semantics: current Flutter parser takes the FIRST relay record
+     (`firstMatch`) and returns null when it lacks media — this pins that behavior.
+     (JS scans all records and prefers media-bearing ones — Phase 07 changes this;
+     the diff will be intentional.) -->
+<html>
+<head><title>stub pin</title></head>
+<body>
+  <script>
+    window.__PWS_RELAY_REGISTER_COMPLETED_REQUEST__("pinterestapp:PinPage:closeup:4", {"data":{"pin_closeup":{"data":{"entityId":"555000111222333444555666777888999000111","title":"Stub Pin No Media"}}}});
+  </script>
+</body>
+</html>
