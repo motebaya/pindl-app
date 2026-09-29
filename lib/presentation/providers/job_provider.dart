@@ -21,6 +21,7 @@ import '../../data/services/pinterest_extractor_service.dart';
 import '../../data/services/task_state_persistence.dart';
 import '../../data/models/background_task_state.dart';
 import '../utils/error_messages.dart';
+import '../../core/persistence/metadata_schema.dart';
 import 'history_provider.dart';
 import 'log_provider.dart';
 import 'foreground_service_manager.dart';
@@ -61,6 +62,10 @@ class AppJobState {
   /// Used by UI to disable download button for a type that's already fully downloaded.
   final bool imagesFullyDownloaded;
   final bool videosFullyDownloaded;
+  /// v2 metadata: the previous session's authoritative completion set
+  /// (success | explicit skip indices). Empty for v1 files (counter
+  /// semantics — documented degradation, D-04 contract).
+  final Set<int> previousCompletedIndices;
 
   const AppJobState({
     this.status = JobStatus.idle,
@@ -85,6 +90,7 @@ class AppJobState {
     this.previousMediaType,
     this.imagesFullyDownloaded = false,
     this.videosFullyDownloaded = false,
+    this.previousCompletedIndices = const {},
   });
 
   /// Derived state: is currently fetching info (Phase B)
@@ -160,6 +166,7 @@ class AppJobState {
     String? previousMediaType,
     bool? imagesFullyDownloaded,
     bool? videosFullyDownloaded,
+    Set<int>? previousCompletedIndices,
   }) {
     return AppJobState(
       status: status ?? this.status,
@@ -184,6 +191,7 @@ class AppJobState {
       previousMediaType: previousMediaType ?? this.previousMediaType,
       imagesFullyDownloaded: imagesFullyDownloaded ?? this.imagesFullyDownloaded,
       videosFullyDownloaded: videosFullyDownloaded ?? this.videosFullyDownloaded,
+      previousCompletedIndices: previousCompletedIndices ?? this.previousCompletedIndices,
     );
   }
 
@@ -492,20 +500,19 @@ class JobNotifier extends StateNotifier<AppJobState> {
     // REVISION 1: Save metadata immediately after parsing (before download)
     if (saveMetadata && result.author != null) {
       final baseFolder = 'PinDL/@$normalizedUsername';
-      final metadataJson = {
-        'author': result.author.toJson(),
-        'pins': result.pins.map((p) => p.toJson()).toList(),
-        'totalImages': result.totalImages,
-        'totalVideos': result.totalVideos,
-        'success_downloaded': 0,
-        'skip_downloaded': 0,
-        'failed_downloaded': 0,
-        'last_index_downloaded': -1,
-        'was_interrupted': false,
-        'status': 'parsed', // Mark as parsed but not downloaded yet
-        'media_type': mediaType.name,
-        'saved_at': DateTime.now().toIso8601String(),
-      };
+      final metadataJson = MetadataReader.buildV2Metadata(
+        author: result.author,
+        pins: result.pins,
+        completedIndices: const {}, // nothing downloaded yet at parse time
+        totalImages: result.totalImages,
+        totalVideos: result.totalVideos,
+        successDownloaded: 0,
+        skipDownloaded: 0,
+        failedDownloaded: 0,
+        wasInterrupted: false,
+        mediaType: mediaType.name,
+        status: 'parsed', // Mark as parsed but not downloaded yet
+      );
       await _saveMetadata(baseFolder, '${result.author.userId}.json', metadataJson);
       _logService.saved('Metadata saved for @${result.author.username}');
     }
@@ -595,16 +602,29 @@ class JobNotifier extends StateNotifier<AppJobState> {
         return false;
       }
       
-      // Parse the JSON
-      final json = jsonDecode(content) as Map<String, dynamic>;
-      final result = UserPinsResult.fromMetadataJson(json);
-      
-      _logService.parse('Loaded metadata for @${result.author.username}');
+      // Phase 04: versioned read (persistence/01). Three safe paths:
+      // corrupt JSON → no-resume-data (safe restart); future schema →
+      // upgrade prompt, never silent reinterpretation; v1 → legacy
+      // counter semantics (documented degradation).
+      final read = MetadataReader.parseAndRead(content);
+      if (read.isCorrupt) {
+        _logService.error('Metadata unreadable (corrupt/truncated) — re-extract or delete the metadata file to restart safely.');
+        return false;
+      }
+      if (read.isFutureSchema) {
+        _logService.error('Metadata was created by a newer PinDL (schema ${read.schemaVersion}) — update the app to continue this download.');
+        return false;
+      }
+
+      final result = UserPinsResult.fromMetadataJson(read.jsonMap!);
+      final completedIndices = read.completedIndices ?? const <int>{};
+
+      _logService.parse('Loaded metadata (schema ${read.schemaVersion}) for @${result.author.username}');
       _logService.parse('Previous stats: Downloaded ${result.successDownloaded}, Skipped ${result.skipDownloaded}, Failed ${result.failedDownloaded}');
       _logService.parse('Last index: ${result.lastIndexDownloaded}, Was interrupted: ${result.wasInterrupted}');
-      
+
       // Read previous media type from metadata (used for cross-type continue detection)
-      final previousMediaType = json['media_type'] as String?;
+      final previousMediaType = read.mediaType;
 
       // Derive per-type completion from accumulated counts:
       // If (success + skipped + failed) >= total for that type → fully done
@@ -632,12 +652,16 @@ class JobNotifier extends StateNotifier<AppJobState> {
         previousDownloaded: result.successDownloaded,
         previousSkipped: result.skipDownloaded,
         previousFailed: result.failedDownloaded,
-        lastIndexDownloaded: result.lastIndexDownloaded,
+        // v2: hole-aware index; v1: raw counter (legacy semantics)
+        lastIndexDownloaded: read.schemaVersion >= 2
+            ? maxContiguous(completedIndices)
+            : result.lastIndexDownloaded,
         wasInterrupted: result.wasInterrupted,
         isContinueMode: true,
         previousMediaType: previousMediaType,
         imagesFullyDownloaded: imagesAlreadyDone,
         videosFullyDownloaded: videosAlreadyDone,
+        previousCompletedIndices: completedIndices,
       );
       
       final remaining = previousMediaType == 'video'
@@ -1006,8 +1030,9 @@ class JobNotifier extends StateNotifier<AppJobState> {
     // Build a map of pinId -> (url, filename) for history tracking
     final Map<String, (String url, String filename)> pinUrlMap = {};
     
-    // Track last completed index for resume (continue from previous lastIndex)
-    int lastCompletedIndex = state.isContinueMode ? state.lastIndexDownloaded : -1;
+    // D-04 resume truth: the completion sets are authoritative; the derived
+    // v1-compatible last_index_downloaded is computed at write time via
+    // maxContiguous(session ∪ previous) inside MetadataReader.buildV2Metadata.
     
     // Separate HLS items (need special processing) from regular items
     final hlsItems = itemsToDownload.where((i) => i.isHls).toList();
@@ -1032,6 +1057,15 @@ class JobNotifier extends StateNotifier<AppJobState> {
       );
     }
     
+    // D-04 completion-set tracking: indices are absolute (downloadItems
+    // coordinates). The previous session's set merges only when the media
+    // type matches (otherwise indices refer to a different item list).
+    final sessionCompleted = <int>{};
+    final previousCompleted = sameMediaType ? state.previousCompletedIndices : const <int>{};
+    final regularIndexByPin = <String, int>{
+      for (var i = 0; i < regularItems.length; i++) regularItems[i].pinId: startIndex + i,
+    };
+
     // Process regular queue first
     if (regularItems.isNotEmpty) {
       await _downloadService.processQueue(
@@ -1039,14 +1073,13 @@ class JobNotifier extends StateNotifier<AppJobState> {
         subFolder: isVideoOnly ? videosFolder : imagesFolder,
         onCompleted: (pinId) {
           _logService.saved('Saved: $pinId');
-          lastCompletedIndex = startIndex + state.currentIndex;
+          // D-04: success = complete → enters the completion set.
+          final idx = regularIndexByPin[pinId];
+          if (idx != null) sessionCompleted.add(idx);
+
           state = state.copyWith(
             downloadedCount: state.downloadedCount + 1,
             currentIndex: state.currentIndex + 1,
-          );
-          _updatePersistedProgress(
-            currentIndex: state.currentIndex,
-            successCount: state.downloadedCount,
           );
           
           final info = pinUrlMap[pinId];
@@ -1060,7 +1093,10 @@ class JobNotifier extends StateNotifier<AppJobState> {
         },
         onSkipped: (pinId, reason) {
           _logService.skipped('Skipped $pinId: $reason');
-          lastCompletedIndex = startIndex + state.currentIndex;
+          // D-04: explicit skip = complete → enters the completion set.
+          final idx = regularIndexByPin[pinId];
+          if (idx != null) sessionCompleted.add(idx);
+
           state = state.copyWith(
             skippedCount: state.skippedCount + 1,
             currentIndex: state.currentIndex + 1,
@@ -1072,7 +1108,9 @@ class JobNotifier extends StateNotifier<AppJobState> {
         },
         onFailed: (pinId, error) {
           _logService.error('Failed $pinId: $error');
-          lastCompletedIndex = startIndex + state.currentIndex;
+          // D-04: failed = INCOMPLETE → hole; NOT in the completion set;
+          // continue re-offers it. Index bookkeeping still advances.
+
           state = state.copyWith(
             failedCount: state.failedCount + 1,
             currentIndex: state.currentIndex + 1,
@@ -1114,7 +1152,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
             final exists = await _downloadService.fileExistsInDownloads(outputFilename, videosFolder);
             if (exists) {
               _logService.skipped('Skipped ${item.pinId}: File exists');
-              lastCompletedIndex = startIndex + regularItems.length + i;
+              sessionCompleted.add(startIndex + regularItems.length + i);
+
               state = state.copyWith(
                 skippedCount: state.skippedCount + 1,
                 currentIndex: state.currentIndex + 1,
@@ -1163,7 +1202,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
           
           if (savedPath != null) {
             _logService.saved('Saved: $outputFilename');
-            lastCompletedIndex = startIndex + regularItems.length + i;
+            sessionCompleted.add(startIndex + regularItems.length + i);
+
             state = state.copyWith(
               downloadedCount: state.downloadedCount + 1,
               currentIndex: state.currentIndex + 1,
@@ -1179,7 +1219,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
           }
         } catch (e) {
           _logService.error('HLS failed ${item.pinId}: $e');
-          lastCompletedIndex = startIndex + regularItems.length + i;
+
           state = state.copyWith(
             failedCount: state.failedCount + 1,
             currentIndex: state.currentIndex + 1,
@@ -1210,7 +1250,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
             final exists = await _downloadService.fileExistsInDownloads(outputFilename, videosFolder);
             if (exists) {
               _logService.skipped('Skipped ${item.pinId}: File exists');
-              lastCompletedIndex = startIndex + regularItems.length + i;
+              sessionCompleted.add(startIndex + regularItems.length + i);
+
               state = state.copyWith(
                 skippedCount: state.skippedCount + 1,
                 currentIndex: state.currentIndex + 1,
@@ -1239,7 +1280,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
             );
             
             _logService.saved('Saved: $outputFilename');
-            lastCompletedIndex = startIndex + regularItems.length + i;
+            sessionCompleted.add(startIndex + regularItems.length + i);
+
             state = state.copyWith(
               downloadedCount: state.downloadedCount + 1,
               currentIndex: state.currentIndex + 1,
@@ -1258,7 +1300,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
           }
         } catch (e) {
           _logService.error('Failed ${item.pinId}: $e');
-          lastCompletedIndex = startIndex + regularItems.length + i;
+
           state = state.copyWith(
             failedCount: state.failedCount + 1,
             currentIndex: state.currentIndex + 1,
@@ -1284,20 +1326,24 @@ class JobNotifier extends StateNotifier<AppJobState> {
     final totalFailed = state.previousFailed + state.failedCount;
     
     // Save user metadata if requested (to PinDL/@username/<userId>.json)
+    // Phase 04: schema v2 — carries the authoritative completion set
+    // (D-04 truth table) + v1-compatible derived fields.
     if (saveMetadata && author != null) {
-      final metadataJson = {
-        'author': author.toJson(),
-        'pins': pins.map((p) => p.toJson()).toList(),
-        'totalImages': state.totalImages,
-        'totalVideos': state.totalVideos,
-        'success_downloaded': totalDownloaded,
-        'skip_downloaded': totalSkipped,
-        'failed_downloaded': totalFailed,
-        'last_index_downloaded': lastCompletedIndex,
-        'was_interrupted': wasInterrupted,
-        'media_type': mediaType.name,
-        'saved_at': DateTime.now().toIso8601String(),
-      };
+      final mergedCompleted = sessionCompleted.union(
+        sameMediaType ? previousCompleted : const <int>{},
+      );
+      final metadataJson = MetadataReader.buildV2Metadata(
+        author: author,
+        pins: pins,
+        completedIndices: mergedCompleted,
+        totalImages: state.totalImages,
+        totalVideos: state.totalVideos,
+        successDownloaded: totalDownloaded,
+        skipDownloaded: totalSkipped,
+        failedDownloaded: totalFailed,
+        wasInterrupted: wasInterrupted,
+        mediaType: mediaType.name,
+      );
       await _saveMetadata(baseFolder, '${author.userId}.json', metadataJson);
     }
     

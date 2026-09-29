@@ -299,10 +299,30 @@ Downloads/
     ├── @username/
     │   ├── Images/         # Downloaded images
     │   ├── Videos/         # Downloaded videos
-    │   └── <userId>.json   # User metadata with resume stats
+    │   └── <userId>.json   # User metadata with resume stats (schema v2)
     └── metadata/
         └── <pinId>.json    # Single pin metadata
 ```
+
+### Resume semantics (metadata schema v2)
+
+The user metadata JSON is the authoritative resume record. It carries a
+`schema` version; v2 adds `completed_indices` — the set of item indices
+completed per the truth table below:
+
+| Outcome | Completion state | On continue |
+|---|---|---|
+| success | complete | not re-offered |
+| skipped (file exists) | complete | not re-offered |
+| failed | **incomplete (hole)** | **re-offered** |
+| cancelled | **incomplete (hole)** | **re-offered** |
+
+`last_index_downloaded` = `maxContiguous(completed_indices)` — every item at
+or before that index is definitively done; continue starts just after it and
+re-offers holes. Older v1 files (no `schema` key) keep working with simple
+counter semantics; corrupt or unreadable files are never partially applied —
+continue treats them as no resume data. Files written by a newer app version
+show an upgrade prompt instead of misreading.
 
 ## Legal Notice
 

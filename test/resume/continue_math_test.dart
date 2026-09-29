@@ -1,19 +1,25 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pindl/core/persistence/metadata_schema.dart';
 import 'package:pindl/data/models/author.dart';
 import 'package:pindl/data/models/pin_item.dart';
 import 'package:pindl/data/models/user_pins_result.dart';
 
 import '../helpers/fixture_loader.dart';
 
-/// Characterization: resume math as it exists today (metadata v1 counter semantics).
+/// Resume math — Phase 04 contract now LIVE (was Phase 02 characterization).
 ///
-/// Pins CURRENT behavior: `last_index_downloaded` is a raw counter that
-/// advances on completed AND skipped AND failed items alike in the session flow
-/// (the D-04 truth-table change lands in Phase 04; these pins make the diff
-/// visible and deliberate).
-///
-/// Also executable-checks the D-04 target contract (maxContiguous) so Phase 04
-/// implements against a tested spec, not prose.
+/// PHASE 04 FLIPS (deliberate, documented in reports/phases/04):
+/// - the session writer emits schema v2 (completion set + derived
+///   last_index_downloaded = maxContiguous) — the D-04 truth table governs;
+/// - v1 FILES still read with raw counter semantics (documented degradation,
+///   no worse than before) — asserted executably below instead of the old
+///   tautological counter pin;
+/// - the maxContiguous executable spec is now implemented in
+///   `core/persistence/metadata_schema.dart` and contract-tested there
+///   (test/persistence/resume_contract_test.dart); the spec tests here stay
+///   as the original source-of-truth record.
 void main() {
   group('metadata v1 round-trip (current schema, no version field)', () {
     test('v1 fixture loads into UserPinsResult with resume stats', () {
@@ -35,13 +41,17 @@ void main() {
     });
   });
 
-  group('CURRENT counter semantics (pinned — Phase 04 changes this deliberately)', () {
-    test('lastIndexDownloaded is whatever the session wrote (counter, not contiguity)', () {
-      // Simulate the v1 writer behavior: failed item still advances the counter.
-      // PinItem pins out-of-order/hole data would be LOST by this contract —
-      // exactly the DL-3 defect. Pin it as the current truth:
-      const simulatedV1Counter = 4; // includes failed item at index 2
-      expect(simulatedV1Counter, 4); // current behavior accepts this silently
+  group('v1 counter semantics (Phase 04 flip: v2 contract live, v1 degraded deliberately)', () {
+    test('v1 files keep counter semantics — continue starts at counter + 1', () {
+      // v1 limitation preserved verbatim: a counter of 4 that includes a
+      // failed item at index 2 means continue starts at 5 — item 2 is NOT
+      // re-offered (v1 cannot know about holes; no worse than before).
+      // v2 files are hole-aware (see test/persistence/resume_contract_test.dart).
+      final r = MetadataReader.parseAndRead(
+          jsonEncode({'success_downloaded': 4, 'last_index_downloaded': 4}));
+      expect(r.schemaVersion, 1);
+      expect(r.continueStartIndex, 5);
+      expect(r.reofferIndices, isEmpty);
     });
   });
 

@@ -5,6 +5,15 @@ import 'package:hive/hive.dart';
 /// Written to Hive on every meaningful progress event.
 /// Read on app resume/relaunch to detect and recover interrupted tasks.
 ///
+/// PHASE 04 restatement (storage layering, PER-4 + D-04 truth table):
+/// this Hive state is EPHEMERAL progress only — the metadata JSON
+/// (schema v2 completion set) is the AUTHORITATIVE resume truth.
+/// Terminal outcomes obey: success | explicit skip = complete;
+/// failed | cancelled = INCOMPLETE → re-offered on continue;
+/// last_index_downloaded = maxContiguous(completion set).
+/// Recovery logic consuming this state must defer to the metadata
+/// contract, never derive its own completion semantics.
+///
 /// TypeId: 1 (first Hive model in PinDL)
 class BackgroundTaskState extends HiveObject {
   /// UUID identifying this task
