@@ -8,12 +8,27 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// Load key.properties if it exists
+// Load signing properties with fallback lookup order (Phase 01 containment):
+//   1. project key.properties (legacy, git-ignored; may contain placeholder values)
+//   2. user-level ~/.gradle/pindl-signing.properties (canonical location - outside any repo)
+//   3. no signing properties -> release builds fall back to debug signing (existing behavior)
+// A properties file counts as usable only if it carries a real (non-placeholder) password.
 val keystorePropertiesFile = rootProject.file("key.properties")
-val keystoreProperties = Properties()
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+val userKeystorePropertiesFile = File(System.getProperty("user.home"), ".gradle/pindl-signing.properties")
+
+fun loadSigningProperties(candidate: java.io.File): Properties? {
+    if (!candidate.exists()) return null
+    val props = Properties()
+    candidate.inputStream().use { props.load(it) }
+    val sp = props.getProperty("storePassword") ?: ""
+    if (sp.isBlank() || sp.startsWith("<")) return null // placeholder/template -> not usable
+    return props
 }
+
+val resolvedKeystoreProperties = loadSigningProperties(keystorePropertiesFile)
+    ?: loadSigningProperties(userKeystorePropertiesFile)
+val keystoreProperties = resolvedKeystoreProperties ?: Properties() // empty dummy when no real config; signing falls back to debug
+val keystorePropertiesFileExists = resolvedKeystoreProperties != null
 
 android {
     namespace = "com.motebaya.pindl"
@@ -60,11 +75,21 @@ android {
     }
 
     signingConfigs {
-        if (keystorePropertiesFile.exists()) {
+        if (keystorePropertiesFileExists) {
             create("release") {
                 keyAlias = keystoreProperties["keyAlias"] as String
                 keyPassword = keystoreProperties["keyPassword"] as String
-                storeFile = file(keystoreProperties["storeFile"] as String)
+                // Resolve storeFile robustly: try as-given (project dir), then relative to android/app,
+                // then relative to android/ — covers absolute paths and ../-style entries from either properties file.
+                val rawStorePath = keystoreProperties["storeFile"] as String
+                val candidates = listOfNotNull(
+                    rootProject.file(rawStorePath),                                    // <repo>/android
+                    file(rawStorePath),                                                // <repo>/android/app
+                    rootProject.projectDir.parentFile?.let { File(it, rawStorePath) }  // repo root
+                )
+                val storeFileResolved = candidates.firstOrNull { it.exists() }
+                    ?: candidates.first() // keep original error message if truly missing
+                storeFile = storeFileResolved
                 storePassword = keystoreProperties["storePassword"] as String
             }
         }
@@ -78,7 +103,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = if (keystorePropertiesFile.exists()) {
+            signingConfig = if (keystorePropertiesFileExists) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")

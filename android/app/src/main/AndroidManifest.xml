@@ -13,15 +13,12 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Wake lock (prevent CPU sleep during background download) -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- Boot completed (WorkManager recovery after reboot) -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:label="PinDL"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:requestLegacyExternalStorage="true"
-        android:usesCleartextTraffic="true">
+        android:requestLegacyExternalStorage="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
