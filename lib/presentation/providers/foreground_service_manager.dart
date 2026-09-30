@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../../core/utils/throttle.dart';
 import '../../data/services/task_state_persistence.dart';
 import '../../data/services/notification_helper.dart';
 import '../../data/services/download_service.dart';
@@ -25,6 +26,10 @@ class ForegroundServiceManager with WidgetsBindingObserver {
   bool _isInBackground = false;
   StreamSubscription? _progressSubscription;
   DateTime? _taskStartedAt;
+
+  /// Phase 12.2 (PERF-4): ≥250 ms between notification updates (leading+
+  /// trailing edges — final state always delivered, see Throttler doc).
+  final Throttler _progressThrottle = Throttler(const Duration(milliseconds: 250));
 
   ForegroundServiceManager({
     required WidgetRef ref,
@@ -179,6 +184,7 @@ class ForegroundServiceManager with WidgetsBindingObserver {
     try {
       await FlutterForegroundTask.stopService();
       _isServiceRunning = false;
+      _progressThrottle.cancel(); // PERF-4: no trailing update post-completion
       _progressSubscription?.cancel();
       _progressSubscription = null;
       // Cancel ALL task-related notifications (progress + completion) — UI takes over
@@ -205,20 +211,24 @@ class ForegroundServiceManager with WidgetsBindingObserver {
     final received = progress.received;
     final total = progress.total;
 
-    if (total > 0) {
-      final percent = ((received / total) * 100).clamp(0, 100).toInt();
-      _notificationHelper.showProgress(
-        title: title,
-        body: body,
-        progress: percent,
-        maxProgress: 100,
-      );
-    } else {
-      _notificationHelper.showIndeterminateProgress(
-        title: title,
-        body: body,
-      );
-    }
+    // PERF-4: byte-chunk events can fire far faster than 4×/s — throttle
+    // the platform-channel notification updates (plan performance/01).
+    _progressThrottle(() {
+      if (total > 0) {
+        final percent = ((received / total) * 100).clamp(0, 100).toInt();
+        _notificationHelper.showProgress(
+          title: title,
+          body: body,
+          progress: percent,
+          maxProgress: 100,
+        );
+      } else {
+        _notificationHelper.showIndeterminateProgress(
+          title: title,
+          body: body,
+        );
+      }
+    });
   }
 
   /// Update extraction progress notification (called from JobNotifier).
@@ -303,6 +313,7 @@ class ForegroundServiceManager with WidgetsBindingObserver {
     try {
       await FlutterForegroundTask.stopService();
       _isServiceRunning = false;
+      _progressThrottle.cancel(); // PERF-4: no trailing update post-completion
       _progressSubscription?.cancel();
       _progressSubscription = null;
       await _notificationHelper.cancelProgress();
