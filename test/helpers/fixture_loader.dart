@@ -36,6 +36,13 @@ class Fixtures {
   static Map<String, dynamic> userPinsBadStatus() =>
       jsonDecode(_load('api/user_pins_badstatus.json')) as Map<String, dynamic>;
 
+  // Board fixtures (Phase 09 — synthetic, shapes mirror live-validated
+  // registry rows; see lib/data/pinterest/resources.dart)
+  static Map<String, dynamic> boardsPage1() =>
+      jsonDecode(_load('api/boards_page1.json')) as Map<String, dynamic>;
+  static Map<String, dynamic> boardSectionsPage1() =>
+      jsonDecode(_load('api/board_sections_page1.json')) as Map<String, dynamic>;
+
   // HLS fixtures
   static String masterVariants() => _load('hls/master_variants.m3u8');
   static String masterMuxed() => _load('hls/master_muxed.m3u8');

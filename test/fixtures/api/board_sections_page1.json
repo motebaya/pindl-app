@@ -1,0 +1,26 @@
+{
+  "resource_response": {
+    "status": "success",
+    "code": 0,
+    "message": "ok",
+    "bookmark": "P9|0|fixture-section-bookmark|0|0|0",
+    "data": [
+      {
+        "id": "333333333333333333",
+        "slug": "fixture-section",
+        "title": "Fixture Section",
+        "pin_count": 5,
+        "description": "Fixture section description",
+        "board": { "id": "111111111111111111", "url": "/fixtureuser/fixture-board/" }
+      },
+      {
+        "id": "444444444444444444",
+        "slug": "fixture-second-section",
+        "title": "Fixture Second Section",
+        "pin_count": 7,
+        "description": null,
+        "board": { "id": "111111111111111111", "url": "/fixtureuser/fixture-board/" }
+      }
+    ]
+  }
+}

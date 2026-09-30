@@ -1,0 +1,31 @@
+{
+  "resource_response": {
+    "status": "success",
+    "code": 0,
+    "message": "ok",
+    "bookmark": null,
+    "data": [
+      {
+        "id": "111111111111111111",
+        "url": "/fixtureuser/fixture-board/",
+        "name": "Fixture Board",
+        "pin_count": 12,
+        "section_count": 2,
+        "image_cover_url": "https://i.pinimg.com/236x/aa/bb/cc/aabbcc11223344556677889900112233.jpg",
+        "image_cover_hd_url": "https://i.pinimg.com/600x600/aa/bb/cc/aabbcc11223344556677889900112233.jpg",
+        "description": "Fixture board description",
+        "privacy": "public"
+      },
+      {
+        "id": "222222222222222222",
+        "url": "/fixtureuser/fixture-second-board/",
+        "name": "Fixture Second Board",
+        "pin_count": 3,
+        "section_count": 0,
+        "image_cover_url": "https://i.pinimg.com/236x/dd/ee/ff/ddeeff00112233445566778899aabbcc.jpg",
+        "description": null,
+        "privacy": "public"
+      }
+    ]
+  }
+}
