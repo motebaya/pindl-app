@@ -630,26 +630,32 @@ extension _HomePageSection on _HomePageState {
     final cardColor = NeumorphismTheme.getCardColor(isDark);
     final textColor = NeumorphismTheme.getTextColor(isDark);
     return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(vertical: 7),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: selected ? accentColor : cardColor,
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: selected
-                ? NeumorphismTheme.getInsetShadows(isDark, intensity: 0.4)
-                : NeumorphismTheme.getRaisedShadows(isDark, intensity: 0.3),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-              color: selected ? Colors.white : textColor,
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: label,
+        excludeSemantics: true,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(vertical: 7),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: selected ? accentColor : cardColor,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: selected
+                  ? NeumorphismTheme.getInsetShadows(isDark, intensity: 0.4)
+                  : NeumorphismTheme.getRaisedShadows(isDark, intensity: 0.3),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? Colors.white : textColor,
+              ),
             ),
           ),
         ),
