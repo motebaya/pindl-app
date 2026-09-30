@@ -187,3 +187,82 @@ jobs:
           name: ${{ steps.ver.outputs.tag }}
           body_path: RELEASE_NOTES.md
           files: dist/*.apk
+
+  # ── Phase 11.2 — emulator validation (REL-2) ──────────────────────────
+  # Runs the host suite (incl. the 11.1 plugin drift test — pub get before
+  # test gives it full coverage) + the channels smoke on an API 30 emulator
+  # through the REAL app: engine alive, media channel round-trips, permission
+  # grant honored. Artifacts (drive log + logcat) upload on failure.
+  emulator-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          cache: true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      # Host suite — includes test/platform/plugin_registration_drift_test.dart
+      # (11.1). pub get ran above, so the deps file exists and set-drift in the
+      # forward direction (new plugin, mirror unaware) fails here, naming it.
+      - name: Flutter test (suite + drift detection)
+        run: flutter test
+
+      - name: Build lite debug APK (pre-install for grant persistence)
+        run: flutter build apk --debug --flavor lite
+
+      # ONE emulator session: install → grant → drive → dump logcat BEFORE
+      # the runner tears the emulator down. Grants survive the drive's
+      # `install -r` reinstall (Phase 10 procedure), and the smoke asserts
+      # the GRANTED path — a missing grant must be red, not skipped.
+      - name: Channels smoke on emulator (API 30)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          script: |
+            set -o pipefail
+            adb install -r build/app/outputs/flutter-apk/app-lite-debug.apk
+            adb shell pm grant com.motebaya.pindl.lite android.permission.POST_NOTIFICATIONS
+            adb shell appops set com.motebaya.pindl.lite MANAGE_EXTERNAL_STORAGE allow
+            adb logcat -c
+            flutter drive --driver=test_driver/integration_test.dart \
+              -t integration_test/smoke_channels_test.dart \
+              --flavor lite --debug 2>&1 | tee smoke_drive.log
+            STATUS=$?
+            adb logcat -d > smoke_logcat.txt || true
+            exit $STATUS
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-validation-logs
+          path: |
+            smoke_drive.log
+            smoke_logcat.txt
+          if-no-files-found: ignore
