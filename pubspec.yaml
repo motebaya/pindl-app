@@ -17,7 +17,6 @@ dependencies:
   
   # State Management
   flutter_riverpod: ^2.4.9
-  riverpod_annotation: ^2.3.3
   
   # Local Storage (Hive)
   hive_flutter: ^1.1.0
@@ -44,13 +43,10 @@ dependencies:
   
   # Utilities
   intl: ^0.18.1
-  uuid: ^4.2.2
   equatable: ^2.0.5
   
   # HLS Video Support
   ffmpeg_kit_flutter_new_https: ^2.1.0  # FFmpeg for HLS->MP4 conversion (community fork)
-  
-  cupertino_icons: ^1.0.8
 
 dev_dependencies:
   flutter_test:
@@ -61,11 +57,12 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   # Phase 12.3 (DEP-1/OQ-5): uuid, cupertino_icons, riverpod_generator,
-  # file_picker, build_runner, hive_generator REMOVED — all grep-verified
-  # zero-reference (uuid/cupertino_icons/riverpod_generator had no imports;
-  # file_picker had no Dart call sites, only stale native registration —
-  # removed from MainActivity/BootPluginAssert lists; no *.g.dart artifacts
-  # exist so codegen chain is dead). D-06 drift test now pins the 9-plugin list.
+  # riverpod_annotation, file_picker, build_runner, hive_generator REMOVED —
+  # all grep-verified zero-reference (uuid/cupertino_icons/riverpod_annotation
+  # had no imports; file_picker had no Dart call sites, only stale native
+  # registration — removed from MainActivity/BootPluginAssert lists; no
+  # *.g.dart artifacts exist so codegen chain is dead). D-06 drift test now
+  # pins the 8-plugin list.
   flutter_launcher_icons: ^0.13.1
 
 flutter_launcher_icons:
