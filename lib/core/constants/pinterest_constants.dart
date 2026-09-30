@@ -26,4 +26,17 @@ class PinterestConstants {
 
   /// User pins resource endpoint
   static const String userPinsResource = '/resource/UserActivityPinsResource/get/';
+
+  /// Boards (user.boards) resource endpoint — Phase 09 (live-validated shape;
+  /// see lib/data/pinterest/resources.dart for the evidence basis).
+  static const String boardsResource = '/resource/BoardsResource/get/';
+
+  /// Board sections (board.sections) resource endpoint — Phase 09.
+  static const String boardSectionsResource = '/resource/BoardSectionsResource/get/';
+
+  /// Board section pins (board.sectionPins) resource endpoint — Phase 09.
+  static const String boardSectionPinsResource = '/resource/BoardSectionPinsResource/get/';
+
+  /// Whole-board feed (board.pins) resource endpoint — Phase 09.
+  static const String boardFeedResource = '/resource/BoardFeedResource/get/';
 }
