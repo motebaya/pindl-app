@@ -97,13 +97,6 @@ class MainActivity : FlutterActivity() {
             Log.e(TAG, "Error registering flutter_foreground_task", e)
         }
 
-        // workmanager — always registered for both flavors
-        try {
-            flutterEngine.plugins.add(dev.fluttercommunity.workmanager.WorkmanagerPlugin())
-        } catch (e: Exception) {
-            Log.e(TAG, "Error registering workmanager", e)
-        }
-
         // flutter_local_notifications — for progress bar + completion heads-up
         try {
             flutterEngine.plugins.add(com.dexterous.flutterlocalnotifications.FlutterLocalNotificationsPlugin())

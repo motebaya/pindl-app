@@ -19,7 +19,7 @@ import java.io.FileInputStream
  * Extracted MethodChannel handler for PinDL media operations.
  *
  * Reusable across MainActivity and background FlutterEngine instances
- * (e.g., when WorkManager restarts after Android 15 timeout).
+ * (e.g., flutter_foreground_task re-initialization after Android timeout).
  *
  * Handles:
  * - saveFileToDownloads, saveTextToFile, readTextFromFile

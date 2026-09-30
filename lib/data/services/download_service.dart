@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../core/constants/pinterest_constants.dart';
 import '../../core/exceptions/pinterest_exception.dart';
 import '../../core/network/media_hosts.dart';
+import '../../core/network/range_resume.dart';
 import '../../core/network/retry.dart';
 import '../../core/utils/format_utils.dart';
 import '../../core/validation/media_validator.dart';
@@ -53,6 +54,10 @@ class DownloadService {
   int _activeDownloads = 0;
   bool _isCancelled = false;
   bool _isPaused = false;
+
+  /// Phase 06 retention sweep: runs once per service lifetime (per run),
+  /// mirroring the HLS converter's 24 h stale-temp sweep (D-05 bound).
+  bool _sweptPartsOnce = false;
   
   // Store the actual output path used (for reporting to user)
   String? _actualOutputPath;
@@ -71,6 +76,31 @@ class DownloadService {
   /// Retry telemetry to the console panel (extraction/03 step 4); console
   /// panel (not print) keeps the analyzer print baseline unchanged.
   void _logRetry(String message) => _logService?.fetch('retry: $message');
+
+  /// Phase 06 retention policy: `.part` / `.part.meta.json` files in the temp
+  /// dir older than 24 h (the D-05 bound) are deleted once per run. Fresh
+  /// interrupted state survives for byte-level resume (RangeResume).
+  void _sweepStalePartsOnce(Directory tempDir) {
+    if (_sweptPartsOnce) return;
+    _sweptPartsOnce = true;
+    final cutoff = DateTime.now().subtract(const Duration(hours: 24));
+    var swept = 0;
+    try {
+      for (final e in tempDir.listSync()) {
+        final name = e.uri.pathSegments.last;
+        if (!name.endsWith('.part') && !name.endsWith('.part.meta.json')) {
+          continue;
+        }
+        try {
+          if (e.statSync().modified.isBefore(cutoff)) {
+            e.deleteSync();
+            swept++;
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+    if (swept > 0) _logRetry('swept $swept stale part file(s) (>= 24 h)');
+  }
 
   static Dio _createDio() {
     return Dio(BaseOptions(
@@ -415,24 +445,26 @@ class DownloadService {
       final tempPath = p.join(tempDir.path, '${task.pinId}_${task.filename}');
       final partPath = '$tempPath.part';
 
-      // Clean up any existing temp/part files
-      final partFile = File(partPath);
-      if (await partFile.exists()) {
-        await partFile.delete();
-      }
+      // Clean up any existing temp-final file. The `.part` + sidecar are the
+      // byte-level resume state (Phase 06) — retained across interruptions
+      // and swept only when stale (_sweepStalePartsOnce).
       final tempFile = File(tempPath);
       if (await tempFile.exists()) {
         await tempFile.delete();
       }
+      _sweepStalePartsOnce(tempDir);
 
-      // Download to .part file in temp directory (D-03 bounded retries —
-      // re-fetch only; validation below runs once, after the final attempt).
+      // Byte-level resume (Phase 06, gate G0/D-30): continues a previous
+      // transfer from the persisted offset on a verified 206, and falls back
+      // to one clean full restart on any mismatch/anomaly. D-03 bounded
+      // retries re-invoke it; each attempt resumes when eligible.
       await retry(
-        () => _dio.download(
+        () => RangeResume.download(
+          _dio,
           task.url,
           partPath,
           cancelToken: cancelToken,
-          onReceiveProgress: (received, total) {
+          onProgress: (received, total) {
             if (total > 0) {
               _progressController.add(DownloadProgress(
                 pinId: task.pinId,
@@ -449,8 +481,11 @@ class DownloadService {
         onLog: _logRetry,
       );
 
-      // Rename .part to temp final
+      // Rename .part to temp final — the sidecar has served its purpose and
+      // dies with the completed part.
       await File(partPath).rename(tempPath);
+      final partMeta = File('$partPath.meta.json');
+      if (await partMeta.exists()) await partMeta.delete();
 
       // DL-2/SEC-4: fail-closed content validation before anything is
       // imported or counted complete. Corrupt/mismatched bodies become a
@@ -487,13 +522,12 @@ class DownloadService {
       onCompleted(task.pinId);
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
-        // Clean up temp files on cancel
+        // Phase 06 (06.4): cancellation PRESERVES `.part` + sidecar so the
+        // next run resumes from the recorded offset (contract: cancel is an
+        // interruption, not a discard). Only the temp-final file is cleaned.
         try {
           final tempDir = await getTemporaryDirectory();
           final tempPath = p.join(tempDir.path, '${task.pinId}_${task.filename}');
-          final partPath = '$tempPath.part';
-          final partFile = File(partPath);
-          if (await partFile.exists()) await partFile.delete();
           final tempFile = File(tempPath);
           if (await tempFile.exists()) await tempFile.delete();
         } catch (_) {}
@@ -568,29 +602,31 @@ class DownloadService {
     final tempPath = p.join(tempDir.path, '${pinId}_$safeFilename');
     final partPath = '$tempPath.part';
 
-    // Clean up any existing temp/part files
-    final partFile = File(partPath);
-    if (await partFile.exists()) {
-      await partFile.delete();
-    }
+    // Clean up any existing temp-final file. The `.part` + sidecar are the
+    // byte-level resume state (Phase 06) — retained across interruptions.
     final tempFile = File(tempPath);
     if (await tempFile.exists()) {
       await tempFile.delete();
     }
+    _sweepStalePartsOnce(tempDir);
 
     try {
+      // Byte-level resume (Phase 06, gate G0/D-30) — see _processTask.
       await retry(
-        () => _dio.download(
+        () => RangeResume.download(
+          _dio,
           url,
           partPath,
           cancelToken: cancelToken,
-          onReceiveProgress: onProgress,
+          onProgress: onProgress,
         ),
         onLog: _logRetry,
       );
 
-      // Rename .part to temp final
+      // Rename .part to temp final — sidecar dies with the completed part.
       await File(partPath).rename(tempPath);
+      final partMeta = File('$partPath.meta.json');
+      if (await partMeta.exists()) await partMeta.delete();
 
       // DL-2/SEC-4: fail-closed content validation before public save.
       final verdict = await MediaValidator.validateFile(
@@ -623,9 +659,11 @@ class DownloadService {
         return tempPath;
       }
     } on DioException catch (e) {
-      // Clean up temp files on error
+      // Phase 06 (06.4): interrupted transfers PRESERVE `.part` + sidecar —
+      // network errors resume from the persisted offset on the next attempt
+      // or next run; cancellation preserves too (contract). Only the
+      // temp-final file is cleaned here.
       try {
-        if (await partFile.exists()) await partFile.delete();
         if (await tempFile.exists()) await tempFile.delete();
       } catch (_) {}
 
