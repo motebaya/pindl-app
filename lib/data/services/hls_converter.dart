@@ -127,7 +127,7 @@ class HlsConverter {
       // Enable log callback for progress
       if (onLog != null) {
         FFmpegKitConfig.enableLogCallback((log) {
-          onLog(log.getMessage() ?? '');
+          onLog(log.getMessage());
         });
       }
 

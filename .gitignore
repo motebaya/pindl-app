@@ -64,6 +64,8 @@ android/key.properties
 .env.*
 
 *.txt
+# Font license text MUST be redistributed with the OFL-licensed TTFs (LEG-2)
+!assets/fonts/OFL.txt
 
 .metadata
 

@@ -71,9 +71,9 @@ class FormatUtils {
 
   /// Build a deterministic filename from pinId and media role.
   /// Convention:
-  ///   video:     <pinId>_video.mp4
-  ///   thumbnail: <pinId>_thumbnail.jpg
-  ///   image:     <pinId>_image.jpg  (or <pinId>_image_<index>.jpg for multiples)
+  ///   video:     `<pinId>_video.mp4`
+  ///   thumbnail: `<pinId>_thumbnail.jpg`
+  ///   image:     `<pinId>_image.jpg`  (or `<pinId>_image_<index>.jpg` for multiples)
   static String pinFilename({
     required String pinId,
     required String role, // 'video', 'thumbnail', 'image'

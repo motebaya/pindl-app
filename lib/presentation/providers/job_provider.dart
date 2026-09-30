@@ -536,7 +536,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
       mediaType: mediaType.name,
       maxPages: maxPages,
     );
-    _persistence!.saveActiveTask(taskState);
+    _persistence.saveActiveTask(taskState);
   }
 
   /// Persist download state to Hive
@@ -551,7 +551,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
       saveMetadata: saveMetadata,
       totalItems: totalItems,
     );
-    _persistence!.saveActiveTask(taskState);
+    _persistence.saveActiveTask(taskState);
   }
 
   /// Update download progress in persisted state

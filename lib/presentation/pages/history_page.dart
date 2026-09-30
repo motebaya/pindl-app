@@ -168,7 +168,7 @@ class _HistoryPageState extends ConsumerState<HistoryPage> {
       child: ListView.separated(
         padding: const EdgeInsets.all(16),
         itemCount: items.length,
-        separatorBuilder: (_, __) => Divider(
+        separatorBuilder: (_, _) => Divider(
           height: 24,
           color: NeumorphismTheme.getSecondaryTextColor(isDark).withValues(alpha: 0.3),
         ),

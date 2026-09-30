@@ -39,9 +39,9 @@ typedef DownloadStatusCallback = void Function(
 ///   @username/
 ///     Images/
 ///     Videos/
-///     <userId>.json (user metadata)
+///     `<userId>.json` (user metadata)
 ///   metadata/
-///     <pinId>.json (single pin metadata)
+///     `<pinId>.json` (single pin metadata)
 class DownloadService {
   final Dio _dio;
   final int maxConcurrent;
@@ -248,7 +248,7 @@ class DownloadService {
       if (Platform.isAndroid) {
         final result = await _mediaChannel.invokeMethod<List<dynamic>>('listFilesInFolder', {
           'subFolder': subFolder,
-          if (extension != null) 'extension': extension,
+          'extension': ?extension,
         });
         return result?.cast<String>() ?? [];
       }
@@ -294,7 +294,8 @@ class DownloadService {
   }
   
   /// Get a valid writable path for downloads
-  /// On Android 11+, file_picker paths may not be writable via dart:io
+  /// On Android 11+, user-selected paths outside app-scoped storage may
+  /// not be writable via dart:io
   /// Returns: (writablePath, isUserSelectedPath)
   Future<(String, bool)> getWritablePathWithInfo(String requestedPath) async {
     // Try the requested path first

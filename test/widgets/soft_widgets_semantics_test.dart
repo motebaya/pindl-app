@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'dart:ui' show SemanticsFlag;
+import 'dart:ui' show CheckedState, Tristate;
 import 'package:pindl/presentation/widgets/soft_checkbox.dart';
 import 'package:pindl/presentation/widgets/soft_toggle.dart';
 
@@ -18,8 +18,8 @@ void main() {
       ));
 
       final semantics = tester.getSemantics(find.byType(SoftToggle));
-      expect(semantics.hasFlag(SemanticsFlag.hasToggledState), isTrue);
-      expect(semantics.hasFlag(SemanticsFlag.isToggled), isTrue);
+      expect(semantics.flagsCollection.isToggled != Tristate.none, isTrue);
+      expect(semantics.flagsCollection.isToggled == Tristate.isTrue, isTrue);
       expect(semantics.label, 'Dark theme');
     });
 
@@ -30,8 +30,8 @@ void main() {
         ),
       ));
       final semantics = tester.getSemantics(find.byType(SoftToggle));
-      expect(semantics.hasFlag(SemanticsFlag.hasToggledState), isTrue);
-      expect(semantics.hasFlag(SemanticsFlag.isToggled), isFalse);
+      expect(semantics.flagsCollection.isToggled != Tristate.none, isTrue);
+      expect(semantics.flagsCollection.isToggled == Tristate.isTrue, isFalse);
     });
 
     testWidgets('Semantics tap toggles the control', (tester) async {
@@ -51,7 +51,7 @@ void main() {
       await tester.tap(find.byType(SoftToggle));
       await tester.pump();
       final semantics = tester.getSemantics(find.byType(SoftToggle));
-      expect(semantics.hasFlag(SemanticsFlag.isToggled), isTrue);
+      expect(semantics.flagsCollection.isToggled == Tristate.isTrue, isTrue);
     });
 
     testWidgets('SoftCheckbox exposes checked state + label', (tester) async {
@@ -65,8 +65,8 @@ void main() {
         ),
       ));
       final semantics = tester.getSemantics(find.byType(SoftCheckbox));
-      expect(semantics.hasFlag(SemanticsFlag.hasCheckedState), isTrue);
-      expect(semantics.hasFlag(SemanticsFlag.isChecked), isTrue);
+      expect(semantics.flagsCollection.isChecked != CheckedState.none, isTrue);
+      expect(semantics.flagsCollection.isChecked == CheckedState.isTrue, isTrue);
       expect(semantics.label, 'Save metadata');
     });
 
@@ -77,8 +77,8 @@ void main() {
         ),
       ));
       final semantics = tester.getSemantics(find.byType(SoftCheckbox));
-      expect(semantics.hasFlag(SemanticsFlag.hasCheckedState), isTrue);
-      expect(semantics.hasFlag(SemanticsFlag.isChecked), isFalse);
+      expect(semantics.flagsCollection.isChecked != CheckedState.none, isTrue);
+      expect(semantics.flagsCollection.isChecked == CheckedState.isTrue, isFalse);
     });
 
     testWidgets('SoftRadio exposes selected state + label', (tester) async {
@@ -106,9 +106,9 @@ void main() {
           tester.getSemantics(find.byWidgetPredicate((w) => w is SoftRadio<String> && w.value == 'whole'));
       final unselected =
           tester.getSemantics(find.byWidgetPredicate((w) => w is SoftRadio<String> && w.value == 'sections'));
-      expect(selected.hasFlag(SemanticsFlag.hasSelectedState), isTrue);
-      expect(selected.hasFlag(SemanticsFlag.isSelected), isTrue);
-      expect(unselected.hasFlag(SemanticsFlag.isSelected), isFalse);
+      expect(selected.flagsCollection.isSelected != Tristate.none, isTrue);
+      expect(selected.flagsCollection.isSelected == Tristate.isTrue, isTrue);
+      expect(unselected.flagsCollection.isSelected == Tristate.isTrue, isFalse);
     });
   });
 }

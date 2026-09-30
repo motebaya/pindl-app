@@ -160,7 +160,6 @@ extension _HomePageSection on _HomePageState {
   Widget _buildOptionsGrid(bool isDark, SettingsState settings) {
     final isUrlInput = _inputType == 'pin';
     final isUsernameInput = _inputType == 'username';
-    final jobState = ref.watch(jobProvider);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

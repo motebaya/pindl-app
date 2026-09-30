@@ -112,7 +112,6 @@ class AboutPage extends ConsumerWidget {
                           _buildFeatureItem(isDark, Icons.link, 'Download single pins via URL or ID'),
                           _buildFeatureItem(isDark, Icons.image, 'Support for images and videos'),
                           _buildFeatureItem(isDark, Icons.save, 'Metadata saving for resume'),
-                          _buildFeatureItem(isDark, Icons.folder, 'Custom output folder selection'),
                           _buildFeatureItem(isDark, Icons.dark_mode, 'Light and dark theme support'),
                         ],
                       ),

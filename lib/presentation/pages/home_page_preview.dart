@@ -6,7 +6,6 @@ extension _HomePagePreview on _HomePageState {
   Widget _buildMediaPreview(bool isDark, dynamic singleResult) {
     final settings = ref.watch(settingsProvider);
     final hasVideo = singleResult.hasVideoContent ?? false;
-    final hasImage = singleResult.hasImage ?? false;
     final thumbnail = singleResult.thumbnail as String?;
     final imageUrl = singleResult.imageUrl as String?;
     final videoUrl = singleResult.videoUrl as String?;

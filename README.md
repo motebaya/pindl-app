@@ -9,9 +9,9 @@
 [![dart](https://img.shields.io/badge/Dart-3.10-0175C2?style=flat&logo=dart&logoColor=white)](https://dart.dev/)
 [![flutter](https://img.shields.io/badge/Flutter-3.38-02569B?style=flat&logo=flutter&logoColor=white)](https://flutter.dev/)
 [![kotlin](https://img.shields.io/badge/Kotlin-2.0-7F52FF?style=flat&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
-[![Android](https://img.shields.io/badge/Android-26%2B-3DDC84?style=flat&logo=android&logoColor=white)](https://developer.android.com)
+[![Android](https://img.shields.io/badge/Android-24%2B-3DDC84?style=flat&logo=android&logoColor=white)](https://developer.android.com)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![API](https://img.shields.io/badge/API-26%2B-brightgreen.svg?style=flat)](https://android-arsenal.com/api?level=26)
+[![API](https://img.shields.io/badge/API-24%2B-brightgreen.svg?style=flat)](https://android-arsenal.com/api?level=24)
 
 </div>
 
@@ -97,11 +97,12 @@ flowchart TD
 | Download from Pinterest username     | ✅     |
 | Download single pins via URL         | ✅     |
 | Download single pins via pin ID      | ✅     |
+| Board downloads with sections (Whole / Sections / Skip) | ✅ |
 | Short URL resolution (pin.it)        | ✅     |
 | Image download support               | ✅     |
 | Video download support (720p)        | ✅     |
 | HLS video conversion (FFmpeg build)  | ✅     |
-| HLS fallback extraction (Lite build) | ✅     |
+| Lite build: direct-MP4 videos; HLS-only videos require the FFmpeg build | ✅ |
 | Batch/bulk downloads                 | ✅     |
 | Background downloads (foreground service) | ✅ |
 | Progress notifications with bar      | ✅     |
@@ -110,7 +111,7 @@ flowchart TD
 | Cross-session progress accumulation  | ✅     |
 | Per-media-type continue mode         | ✅     |
 | Task state persistence (Hive)        | ✅     |
-| Crash recovery (resume prompt at next launch) | ✅     |
+| Interrupted-task prompt on relaunch (Hive-backed) | ✅ |
 | Metadata saving (JSON)               | ✅     |
 | Skip existing files                  | ✅     |
 | Overwrite mode                       | ✅     |
@@ -150,11 +151,14 @@ android/
 └── key.properties          # Signing configuration (not in git)
 ```
 
+> Business orchestration lives in `presentation/providers` (job/extraction/
+> download coordination); see `audits/architecture` for the Phase 08 split.
+
 ## Building
 
 ### Prerequisites
 
-- Flutter SDK 3.10.8 or higher
+- Flutter SDK 3.47.x stable (Dart 3.10 — matches `environment.sdk` ^3.10.8)
 - Android SDK
 - Java JDK 17
 - Keytool (for release builds)
@@ -240,9 +244,16 @@ chmod +x build_prod.sh
 ```
 
 **Build Flavors:**
-- `lite`: ~15-20MB APK, no video format conversion (HLS videos stay as HLS)
-- `ffmpeg`: ~50-60MB APK, includes FFmpeg for HLS → MP4 conversion
+- `lite`: no video format conversion (HLS-only videos require the ffmpeg flavor)
+- `ffmpeg`: includes FFmpeg for HLS → MP4 conversion
 - `all`: Builds both flavors
+
+**Measured APK sizes** (on-disk, D-02 convention; release, minify+shrink):
+lite universal **59.1 MB** and ffmpeg universal **129.7 MB** (2026-10-01,
+Flutter 3.47.5, post-font-purge); baseline per-ABI splits from the
+2026-09-29 audit: lite arm64 24.6 MB, ffmpeg arm64 43.9 MB. Full canonical
+table: `audits/app-size/app-size.md` and the Phase 12 report
+(`reports/phases/12-performance-size-hygiene.md`).
 
 **Split ABI Benefits:**
 - Reduces APK size by ~40-60% per architecture
@@ -324,6 +335,18 @@ counter semantics; corrupt or unreadable files are never partially applied —
 continue treats them as no resume data. Files written by a newer app version
 show an upgrade prompt instead of misreading.
 
+## Reliability & Limitations
+
+- Direct downloads resume at the byte level on Range-supporting hosts
+  (verified on-device); any validator/anomaly response restarts the file
+  from zero rather than risking a corrupt result.
+- HLS → MP4 conversions are **not** byte-resumable (conversion is a remux
+  over a live playlist); item-level retry and skip-existing apply instead.
+- Nothing runs after reboot or process death: interrupted sessions are
+  re-offered via the resume prompt at next launch (Hive-backed).
+- Aggressive OEM battery managers can still kill long background sessions;
+  the interrupted-task prompt at relaunch is the recovery path.
+
 ## Legal Notice
 
 This app is intended for **personal use only**. It only handles publicly accessible content. Users are responsible for ensuring their use complies with Pinterest's terms of service and applicable laws.
@@ -335,3 +358,7 @@ This app is intended for **personal use only**. It only handles publicly accessi
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+Bundled components are distributed under their own licenses (Flutter engine
+BSD-3, PlaypenSans OFL 1.1, FFmpegKit LGPL-3.0 as stated by the package,
+AndroidX/Kotlin Apache-2.0) — see [LICENSES.md](LICENSES.md).

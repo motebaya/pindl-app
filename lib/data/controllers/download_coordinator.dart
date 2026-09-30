@@ -378,9 +378,9 @@ class DownloadCoordinator {
 
     if (isContinueMode) {
       hooks.queue('Continue mode: skipping first $startIndex items');
-      hooks.queue('Remaining to download: $imageCount images, $videoCount videos (${mp4Count} MP4, $hlsCount HLS), total ${itemsToDownload.length} items');
+      hooks.queue('Remaining to download: $imageCount images, $videoCount videos ($mp4Count MP4, $hlsCount HLS), total ${itemsToDownload.length} items');
     } else {
-      hooks.queue('To be downloaded: $imageCount images, $videoCount videos (${mp4Count} MP4, $hlsCount HLS)');
+      hooks.queue('To be downloaded: $imageCount images, $videoCount videos ($mp4Count MP4, $hlsCount HLS)');
     }
     if (hlsCount > 0) {
       if (BuildConfig.enableFfmpeg) {
