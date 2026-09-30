@@ -7,6 +7,7 @@ import 'package:video_player/video_player.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/neumorphism_theme.dart';
 import '../../core/utils/pin_url_validator.dart';
+import '../../data/models/board.dart';
 import '../../data/models/history_item.dart';
 import '../../data/models/job_state.dart';
 import '../providers/history_provider.dart';
@@ -14,6 +15,7 @@ import '../providers/job_provider.dart';
 import '../providers/log_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/theme_provider.dart';
+import '../widgets/board_picker.dart';
 import '../widgets/console_panel.dart';
 import '../widgets/soft_button.dart';
 import '../widgets/soft_card.dart';
@@ -399,19 +401,29 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                               const SizedBox(height: 16),
                             ],
 
-                            // Submit row (fetch info only)
-                            _buildSubmitRow(isDark, jobState, settings),
+                            // Phase 10: boards mode routes submit + results
+                            // to the board flow; feed flow untouched.
+                            if (_inputType == 'username' && settings.boardsMode) ...[
+                              _buildBoardSubmitRow(isDark, jobState),
+                              if (jobState.discoveredBoards.isNotEmpty) ...[
+                                const SizedBox(height: 16),
+                                _buildBoardResultsSection(isDark, jobState, settings),
+                              ],
+                            ] else ...[
+                              // Submit row (fetch info only)
+                              _buildSubmitRow(isDark, jobState, settings),
 
-                            // Result info card (shown after submit success)
-                            if (jobState.hasResults) ...[
-                              const SizedBox(height: 16),
-                              _buildResultsSection(isDark, jobState, settings),
-                            ],
+                              // Result info card (shown after submit success)
+                              if (jobState.hasResults) ...[
+                                const SizedBox(height: 16),
+                                _buildResultsSection(isDark, jobState, settings),
+                              ],
 
-                            // Download confirmation row (shown after info loaded)
-                            if (jobState.hasResults) ...[
-                              const SizedBox(height: 16),
-                              _buildDownloadConfirmation(isDark, jobState, settings),
+                              // Download confirmation row (shown after info loaded)
+                              if (jobState.hasResults) ...[
+                                const SizedBox(height: 16),
+                                _buildDownloadConfirmation(isDark, jobState, settings),
+                              ],
                             ],
 
                             const SizedBox(height: 16),

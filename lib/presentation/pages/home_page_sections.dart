@@ -161,10 +161,17 @@ extension _HomePageSection on _HomePageState {
     final isUrlInput = _inputType == 'pin';
     final isUsernameInput = _inputType == 'username';
     final jobState = ref.watch(jobProvider);
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Phase 10 (boards-ux plan §1): Feed | Boards mode switch —
+        // username input only (boards are a profile-scoped resource).
+        if (isUsernameInput) ...[
+          _buildBoardModeSwitch(isDark, settings),
+          const SizedBox(height: 10),
+        ],
+
         // 2-column grid for options
         Row(
           children: [
@@ -585,5 +592,118 @@ extension _HomePageSection on _HomePageState {
         ],
       ),
     );
+  }
+
+  // ---- Phase 10: boards mode (boards-ux plan §1–2; D-38 flows) ----
+
+  /// "Feed | Boards" mode switch — username input only. Pure UI state
+  /// (settings), discovery submit routes on it.
+  Widget _buildBoardModeSwitch(bool isDark, SettingsState settings) {
+    final boardsMode = settings.boardsMode;
+    return Row(
+      children: [
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: NeumorphismTheme.getSurfaceColor(isDark),
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: NeumorphismTheme.getInsetShadows(isDark, intensity: 0.3),
+            ),
+            child: Row(
+              children: [
+                _boardModePill(isDark, 'Feed', !boardsMode,
+                    () => ref.read(settingsProvider.notifier).setBoardsMode(false)),
+                _boardModePill(isDark, 'Boards', boardsMode,
+                    () => ref.read(settingsProvider.notifier).setBoardsMode(true)),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _boardModePill(bool isDark, String label, bool selected,
+      VoidCallback onTap) {
+    final accentColor = NeumorphismTheme.getAccentColor(isDark);
+    final cardColor = NeumorphismTheme.getCardColor(isDark);
+    final textColor = NeumorphismTheme.getTextColor(isDark);
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(vertical: 7),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? accentColor : cardColor,
+            borderRadius: BorderRadius.circular(8),
+            boxShadow: selected
+                ? NeumorphismTheme.getInsetShadows(isDark, intensity: 0.4)
+                : NeumorphismTheme.getRaisedShadows(isDark, intensity: 0.3),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              color: selected ? Colors.white : textColor,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Board discovery submit row (Boards mode) — mirrors the feed submit
+  /// row's disabled/loading states; routes to discoverBoards.
+  Widget _buildBoardSubmitRow(bool isDark, AppJobState jobState) {
+    final isBoardsExtracting = jobState.isDiscoveringBoards;
+    final canSubmit = _inputController.text.isNotEmpty &&
+        _inputError == null &&
+        (jobState.canSubmit || jobState.status == JobStatus.idle) &&
+        !isBoardsExtracting &&
+        !jobState.isExtracting;
+
+    return Row(
+      children: [
+        Expanded(
+          child: SoftButton(
+            label: isBoardsExtracting ? 'Finding boards...' : 'Find boards',
+            icon: isBoardsExtracting ? null : Icons.dashboard_customize,
+            isLoading: isBoardsExtracting,
+            isDisabled: !canSubmit,
+            onPressed: canSubmit
+                ? () => ref.read(jobProvider.notifier).discoverBoards(
+                      username: _inputController.text,
+                      maxPages: 1,
+                      verbose: ref.read(settingsProvider).verbose,
+                    )
+                : null,
+          ),
+        ),
+        if (isBoardsExtracting) ...[
+          const SizedBox(width: 12),
+          SoftIconButton(
+            icon: Icons.stop,
+            iconColor: AppColors.error,
+            tooltip: 'Stop board search',
+            onPressed: () => ref.read(jobProvider.notifier).cancelBoardDiscovery(),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Section lazy-load + selection update (picker callbacks → provider).
+  void _onRequestSections(Board board) {
+    final username = PinUrlValidator.normalizeUsername(_inputController.text);
+    ref.read(jobProvider.notifier).loadBoardSections(
+          boardId: board.boardId,
+          username: username,
+          boardSlug: board.slug,
+        );
   }
 }

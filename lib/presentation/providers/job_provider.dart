@@ -9,6 +9,9 @@ import '../../core/persistence/metadata_schema.dart';
 import '../../core/utils/format_utils.dart';
 import '../../core/utils/pin_url_validator.dart';
 import '../../data/models/author.dart';
+import '../../data/models/board.dart';
+import '../../data/models/board_section.dart';
+import '../../data/models/board_selection.dart';
 import '../../data/models/history_item.dart';
 import '../../data/models/job_state.dart';
 import '../../data/models/media_result.dart';
@@ -18,6 +21,7 @@ import '../../data/services/download_service.dart';
 import '../../data/services/hls_converter.dart';
 import '../../data/services/hls_service.dart';
 import '../../data/services/log_service.dart';
+import '../../data/controllers/board_controller.dart';
 import '../../data/controllers/download_coordinator.dart';
 import '../../data/controllers/extraction_controller.dart';
 import '../../data/services/pinterest_extractor_service.dart';
@@ -75,6 +79,22 @@ class AppJobState {
   final String? nextBookmark;
   final BookmarkContext? bookmarkContext;
 
+  // ---- Phase 10 (D-38): board flow context — additive; feed flows never
+  // read these. One board at a time through the SAME state machine.
+
+  /// Boards discovered for the current username (display order;
+  /// caller sorts pinCount desc per the boards-ux plan).
+  final List<Board> discoveredBoards;
+
+  /// True while board discovery is running (Phase B for boards mode).
+  final bool isDiscoveringBoards;
+
+  /// Sections fetched per boardId (lazy, via loadBoardSections).
+  final Map<String, List<BoardSection>> boardSections;
+
+  /// The user's Whole/Sections/Skip selection (drives the board jobs).
+  final BoardSelection boardSelection;
+
   const AppJobState({
     this.status = JobStatus.idle,
     this.input,
@@ -101,6 +121,10 @@ class AppJobState {
     this.previousCompletedIndices = const {},
     this.nextBookmark,
     this.bookmarkContext,
+    this.discoveredBoards = const [],
+    this.isDiscoveringBoards = false,
+    this.boardSections = const {},
+    this.boardSelection = const BoardSelection(choices: []),
   });
 
   /// Derived state: is currently fetching info (Phase B)
@@ -186,6 +210,10 @@ class AppJobState {
     Set<int>? previousCompletedIndices,
     String? nextBookmark,
     BookmarkContext? bookmarkContext,
+    List<Board>? discoveredBoards,
+    bool? isDiscoveringBoards,
+    Map<String, List<BoardSection>>? boardSections,
+    BoardSelection? boardSelection,
   }) {
     return AppJobState(
       status: status ?? this.status,
@@ -213,6 +241,10 @@ class AppJobState {
       previousCompletedIndices: previousCompletedIndices ?? this.previousCompletedIndices,
       nextBookmark: nextBookmark ?? this.nextBookmark,
       bookmarkContext: bookmarkContext ?? this.bookmarkContext,
+      discoveredBoards: discoveredBoards ?? this.discoveredBoards,
+      isDiscoveringBoards: isDiscoveringBoards ?? this.isDiscoveringBoards,
+      boardSections: boardSections ?? this.boardSections,
+      boardSelection: boardSelection ?? this.boardSelection,
     );
   }
 
@@ -227,6 +259,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
   final LogService _logService;
   final PinterestExtractorService _extractor;
   final ExtractionController _extraction;
+  late final BoardController _boards;
   final DownloadService _downloadService;
   late final DownloadCoordinator _download;
   final HlsService? _hlsService;
@@ -259,6 +292,10 @@ class JobNotifier extends StateNotifier<AppJobState> {
   
   CancelToken? _extractCancelToken;
   CancelToken? _downloadCancelToken;
+  CancelToken? _boardCancelToken;
+
+  /// Active board discovery token captured for cancelBoardDiscovery.
+  CancelToken? get boardCancelToken => _boardCancelToken;
   
   JobNotifier({
     required LogService logService,
@@ -286,8 +323,19 @@ class JobNotifier extends StateNotifier<AppJobState> {
             complete: logService.complete,
           ),
         ),
-        _downloadService = downloadService,
-        // Only instantiate HLS services when FFmpeg is enabled (compile-time const).
+    _downloadService = downloadService,
+    _boards = BoardController(
+      extractor: extractor,
+      log: ControllerLog(
+        init: logService.init,
+        fetch: logService.fetch,
+        parse: logService.parse,
+        config: logService.config,
+        queue: logService.queue,
+        complete: logService.complete,
+      ),
+    ),
+    // Only instantiate HLS services when FFmpeg is enabled (compile-time const).
         // Tree-shaking eliminates HlsService/HlsConverter from lite AOT binaries.
         _hlsService = BuildConfig.enableFfmpeg ? (hlsService ?? HlsService()) : null,
         _hlsConverter = BuildConfig.enableFfmpeg ? (hlsConverter ?? HlsConverter()) : null,
@@ -660,6 +708,108 @@ class JobNotifier extends StateNotifier<AppJobState> {
     if (!state.isExtracting) return;
     _extraction.cancel();
     _logService.interrupted('Info loading cancelled by user');
+  }
+
+  // ---- Phase 10 (D-38): board discovery flows (Phase B for boards mode).
+  // Feed flows never touch these; board jobs (download side) land in 10.2/10.3.
+
+  /// Discover a user's public boards (Phase B, boards mode): config →
+  /// fetchBoards (capped) → sorted pinCount desc (boards-ux plan §2, JS
+  /// parity). Additive state only — feed state fields untouched.
+  Future<void> discoverBoards({
+    required String username,
+    int maxPages = 1,
+    bool verbose = false,
+  }) async {
+    _extractor.verbose = verbose;
+    if (state.isExtracting || state.isDiscoveringBoards) {
+      _logService.error('Cannot start board discovery: another operation in progress');
+      return;
+    }
+    final normalizedUsername = PinUrlValidator.normalizeUsername(username);
+    _boardCancelToken = CancelToken();
+
+    state = state.copyWith(
+      status: JobStatus.fetchingInfo,
+      isDiscoveringBoards: true,
+      input: normalizedUsername,
+      isUsername: true,
+      error: null,
+    );
+    _logService.init('Discovering boards for @$normalizedUsername...');
+
+    try {
+      final config = await _extractor.getConfigInfo(
+        username: normalizedUsername,
+        cancelToken: _boardCancelToken,
+      );
+      final listing = await _boards.fetchBoards(
+        userId: config.userId,
+        username: normalizedUsername,
+        maxPages: maxPages,
+        cancelToken: _boardCancelToken,
+      );
+      // JS parity: sort by pinCount desc (boards-ux plan §2).
+      final boards = [...listing.items]
+        ..sort((a, b) => b.pinCount.compareTo(a.pinCount));
+
+      state = state.copyWith(
+        status: JobStatus.readyToDownload,
+        isDiscoveringBoards: false,
+        discoveredBoards: boards,
+        boardSelection: BoardSelection(choices: const []),
+      );
+      _logService.complete(
+          'Found ${boards.length} boards for @$normalizedUsername. Select boards to download.');
+    } on CancelledException {
+      _logService.interrupted('Board discovery cancelled');
+      state = state.copyWith(status: JobStatus.cancelled, isDiscoveringBoards: false);
+    } catch (e) {
+      _logService.error('Board discovery failed: ${userMessage(e)}');
+      state = state.copyWith(
+        status: JobStatus.failed,
+        isDiscoveringBoards: false,
+        error: userMessage(e),
+      );
+    }
+  }
+
+  /// Lazy section fetch for one board (picker expansion). Never throws to
+  /// the UI: failures log and leave the board without sections (user can
+  /// still pick Whole mode).
+  Future<void> loadBoardSections({
+    required String boardId,
+    required String username,
+    required String boardSlug,
+  }) async {
+    if (state.boardSections.containsKey(boardId)) return;
+    try {
+      final listing = await _boards.fetchBoardSections(
+        boardId: boardId,
+        username: username,
+        boardSlug: boardSlug,
+        cancelToken: _boardCancelToken,
+      );
+      state = state.copyWith(
+        boardSections: {...state.boardSections, boardId: listing.items},
+      );
+    } on CancelledException {
+      _logService.interrupted('Section loading cancelled');
+    } catch (e) {
+      _logService.error('Section loading failed: ${userMessage(e)}');
+    }
+  }
+
+  /// Update the user's board selection (picker callback).
+  void updateBoardSelection(BoardSelection selection) {
+    state = state.copyWith(boardSelection: selection);
+  }
+
+  /// Cancel an in-flight board discovery.
+  void cancelBoardDiscovery() {
+    if (!state.isDiscoveringBoards) return;
+    _boardCancelToken?.cancel('User cancelled');
+    _logService.interrupted('Board discovery cancelled by user');
   }
 
   /// Load existing metadata for continue mode

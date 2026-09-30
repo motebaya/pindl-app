@@ -22,6 +22,10 @@ class SettingsState {
   // Max pages for username fetching (1-100, default 50)
   final int maxPages;
 
+  // Phase 10 (boards-ux plan §1): input mode for username inputs —
+  // false = Feed (default), true = Boards. NOT persisted (session UI state).
+  final bool boardsMode;
+
   const SettingsState({
     this.saveMetadata = false,
     this.overwrite = false,
@@ -32,6 +36,7 @@ class SettingsState {
     this.showPreview = true,
     this.continueMode = false,
     this.maxPages = 50,
+    this.boardsMode = false,
   });
 
   SettingsState copyWith({
@@ -44,6 +49,7 @@ class SettingsState {
     bool? showPreview,
     bool? continueMode,
     int? maxPages,
+    bool? boardsMode,
   }) {
     return SettingsState(
       saveMetadata: saveMetadata ?? this.saveMetadata,
@@ -55,6 +61,7 @@ class SettingsState {
       showPreview: showPreview ?? this.showPreview,
       continueMode: continueMode ?? this.continueMode,
       maxPages: maxPages ?? this.maxPages,
+      boardsMode: boardsMode ?? this.boardsMode,
     );
   }
 }
@@ -128,6 +135,9 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
     state = state.copyWith(showPreview: value);
     _prefs?.setBool(_showPreviewKey, value);
   }
+
+  /// Phase 10: boards mode switch (not persisted — session UI state).
+  void setBoardsMode(bool v) => state = state.copyWith(boardsMode: v);
 
   void setContinueMode(bool value) {
     state = state.copyWith(continueMode: value);

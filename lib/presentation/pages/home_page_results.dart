@@ -425,4 +425,65 @@ extension _HomePageResults on _HomePageState {
       ],
     );
   }
+
+  /// Phase 10 (boards-ux plan §2, §4): board discovery results — the
+  /// BoardPicker plus aggregated estimate totals. Download wiring for board
+  /// jobs lands with 10.2/10.3 (D-38 sequential per-board flows).
+  Widget _buildBoardResultsSection(
+      bool isDark, AppJobState jobState, SettingsState settings) {
+    final selection = jobState.boardSelection;
+    final boardsMode = settings.boardsMode;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: NeumorphismTheme.getSurfaceColor(isDark),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: NeumorphismTheme.getInsetShadows(isDark, intensity: 0.4),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.dashboard_customize,
+                size: 14,
+                color: AppColors.primary,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Boards (${jobState.discoveredBoards.length})'
+                '${selection.boardCount > 0 ? ' · ${selection.boardCount} selected · ~${selection.estimatedPins} pins' : ''}',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: NeumorphismTheme.getSecondaryTextColor(isDark),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          BoardPicker(
+            boards: jobState.discoveredBoards,
+            sectionsByBoard: jobState.boardSections,
+            selection: selection,
+            onChanged: (s) =>
+                ref.read(jobProvider.notifier).updateBoardSelection(s),
+            onRequestSections: _onRequestSections,
+          ),
+          if (boardsMode && selection.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'Select boards to download — Whole board or pick sections.',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: NeumorphismTheme.getSecondaryTextColor(isDark),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
