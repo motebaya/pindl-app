@@ -19,7 +19,8 @@ import 'job_provider.dart';
 /// - State synced between service and UI on transitions
 class ForegroundServiceManager with WidgetsBindingObserver {
   final WidgetRef _ref;
-  final TaskStatePersistence _persistence;
+  // Phase 12.3 (CQ-3): unused `_persistence` field removed (analyzer-flagged;
+  // TaskStatePersistence lives provider-side in jobProvider).
   final NotificationHelper _notificationHelper = NotificationHelper();
   bool _isServiceRunning = false;
   bool _isInitialized = false;
@@ -31,11 +32,7 @@ class ForegroundServiceManager with WidgetsBindingObserver {
   /// trailing edges — final state always delivered, see Throttler doc).
   final Throttler _progressThrottle = Throttler(const Duration(milliseconds: 250));
 
-  ForegroundServiceManager({
-    required WidgetRef ref,
-    required TaskStatePersistence persistence,
-  })  : _ref = ref,
-        _persistence = persistence;
+  ForegroundServiceManager({required WidgetRef ref}) : _ref = ref;
 
   /// Whether the app is currently in the background.
   bool get isInBackground => _isInBackground;
@@ -264,17 +261,9 @@ class ForegroundServiceManager with WidgetsBindingObserver {
   /// progress stream. This method is intentionally a no-op now that FGS
   /// updateService() calls have been removed (Issue 1 fix). Item-level text
   /// updates are folded into the byte-progress notification instead.
-  void updateDownloadItemNotification({
-    required int currentIndex,
-    required int totalItems,
-    required String filename,
-    required int downloaded,
-    required int skipped,
-    required int failed,
-  }) {
-    // No-op: all notification updates go through flutter_local_notifications
-    // via _onDownloadByteProgress and updateExtractionNotification.
-  }
+  /// Phase 12.3 (CQ-3): updateDownloadItemNotification removed — it was a
+  /// documented no-op (item-level text updates are folded into the
+  /// byte-progress notification); zero callers remained.
 
   /// Record when a task starts (for duration calculation).
   void onTaskStarted() {
@@ -387,6 +376,5 @@ final taskStatePersistenceProvider = Provider<TaskStatePersistence>((ref) {
 /// Provider for ForegroundServiceManager
 final foregroundServiceManagerProvider =
     Provider.family<ForegroundServiceManager, WidgetRef>((ref, widgetRef) {
-  final persistence = ref.watch(taskStatePersistenceProvider);
-  return ForegroundServiceManager(ref: widgetRef, persistence: persistence);
+  return ForegroundServiceManager(ref: widgetRef);
 });

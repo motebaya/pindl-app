@@ -36,9 +36,10 @@ import 'package:flutter_test/flutter_test.dart';
 /// The Dart mirror of MainActivity.registerPluginsManually — android PLUGIN
 /// name → registered FQCN. Keep in sync with MainActivity.kt (see header).
 const Map<String, String> kManualAndroidPlugins = {
-  'file_picker': 'com.mr.flutter.plugin.filepicker.FilePickerPlugin',
-  'flutter_plugin_android_lifecycle':
-      'io.flutter.plugins.flutter_plugin_android_lifecycle.FlutterAndroidLifecyclePlugin',
+  // Phase 12.3/OQ-5: file_picker REMOVED (no Dart call sites; dependency
+  // deleted; Kotlin registration entry removed too) — and with it its
+  // TRANSITIVE dep flutter_plugin_android_lifecycle (drift test caught the
+  // stale entry on its first real run).
   'path_provider_android':
       'io.flutter.plugins.pathprovider.PathProviderPlugin',
   'permission_handler_android':
@@ -98,9 +99,9 @@ void main() {
         expect(fqcn.startsWith('com.antonkarpenko'), entry.key.contains('ffmpeg'),
             reason: 'ffmpeg FQCN reserved for the FFmpegKit entry');
       }
-      // Pinned against the stale plan doc: 10 plugins, NO workmanager
-      // (removed with its pretend machinery in Phase 05, D-27).
-      expect(kManualAndroidPlugins.length, 10);
+      // Pinned reality: 8 plugins, NO workmanager (removed Phase 05, D-27),
+      // NO file_picker (removed Phase 12.3, OQ-5).
+      expect(kManualAndroidPlugins.length, 8);
       expect(kManualAndroidPlugins.keys.any((k) => k.contains('workmanager')),
           isFalse, reason: 'workmanager was removed (D-27) — never re-add silently');
     });

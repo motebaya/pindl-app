@@ -699,18 +699,9 @@ class DownloadService {
     _activeTokens.remove(pinId);
   }
 
-  /// Pause the download queue (new items won't start, active downloads continue)
-  void pauseQueue() {
-    _isPaused = true;
-  }
-
-  /// Resume the download queue
-  void resumeQueue() {
-    _isPaused = false;
-  }
-
-  /// Whether the queue is paused
-  bool get isPaused => _isPaused;
+  // Phase 12.3 (CQ-3): pauseQueue/resumeQueue/isPaused removed — dead code
+  // (no callers; UI pause feature does not exist; git history preserves them).
+  // JobStatus.paused stays (persisted state enum value; do not renumber).
 
   /// Get queue size
   int get queueSize => _queue.length;
@@ -750,6 +741,4 @@ class DownloadProgress {
   });
 
   double get percentage => total > 0 ? received / total : 0;
-  String get humanReceived => FormatUtils.humanSize(received);
-  String get humanTotal => FormatUtils.humanSize(total);
 }

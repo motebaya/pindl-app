@@ -62,16 +62,11 @@ class MainActivity : FlutterActivity() {
      */
     private fun registerPluginsManually(flutterEngine: FlutterEngine) {
         // Core plugins — always registered for both flavors
-        try {
-            flutterEngine.plugins.add(com.mr.flutter.plugin.filepicker.FilePickerPlugin())
-        } catch (e: Exception) {
-            Log.e(TAG, "Error registering file_picker", e)
-        }
-        try {
-            flutterEngine.plugins.add(io.flutter.plugins.flutter_plugin_android_lifecycle.FlutterAndroidLifecyclePlugin())
-        } catch (e: Exception) {
-            Log.e(TAG, "Error registering flutter_plugin_android_lifecycle", e)
-        }
+        // (Phase 12.3/OQ-5: file_picker removed — no Dart call sites ever
+        // existed; the SAF comment in pubspec predates the storage design.)
+        // Phase 12.3: flutter_plugin_android_lifecycle was file_picker's
+        // TRANSITIVE dep — removed from the graph together with it (drift
+        // test caught the stale entry on its first real run).
         try {
             flutterEngine.plugins.add(io.flutter.plugins.pathprovider.PathProviderPlugin())
         } catch (e: Exception) {

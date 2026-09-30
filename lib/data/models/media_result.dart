@@ -62,14 +62,8 @@ class MediaResult extends Equatable {
     this.slots = const [],
   });
 
-  /// Get the primary download URL based on media type preference
-  String? get downloadUrl => isVideo ? videoUrl : imageUrl;
-
-  /// Get thumbnail or image URL for preview
-  String? get previewUrl => thumbnail ?? imageUrl;
-
-  /// Check if this pin has both image and video
-  bool get hasBothMedia => hasImage && hasVideoContent;
+  // Phase 12.3 (CQ-3): downloadUrl/previewUrl/hasBothMedia getters removed —
+  // zero callers (callers compose from imageUrl/videoUrl/thumbnail directly).
 
   /// Get download URL for image (or thumbnail if video-only)
   String? getImageDownloadUrl({bool useThumbnailForVideo = false}) {

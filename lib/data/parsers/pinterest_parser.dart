@@ -2,9 +2,7 @@ import 'dart:convert';
 import '../../core/media/video_selection.dart';
 import '../models/author.dart';
 import '../models/media_result.dart';
-import '../models/pin_item.dart';
 import '../models/pinterest_config.dart';
-import '../models/user_pins_result.dart';
 import '../models/video_url.dart';
 
 // PORTED from my Node.js CLI tool
@@ -100,93 +98,6 @@ class PinterestParser {
     if (userId == null || userId.isEmpty) return null;
 
     return PinterestConfig(appVersion: appVersion, userId: userId);
-  }
-
-  /// Parses the JSON response from the Pinterest user pins API.
-  ///
-  /// [response] is the raw JSON map returned by the Pinterest API.
-  /// [existingAuthor] is an optional [Author] object to be associated with the parsed pins.
-  ///
-  /// Returns a [UserPinsResult] containing the list of pins and pagination data,
-  /// or `null` if the response structure is invalid or missing required fields.
-  static UserPinsResult? parseUserPinsResponse(Map<String, dynamic> response, {Author? existingAuthor}) {
-    try {
-      final resourceResponse =
-          response['resource_response'] as Map<String, dynamic>?;
-      if (resourceResponse == null) {
-        print('[PARSER] No resource_response in response');
-        return null;
-      }
-
-      // Check status, code, and message like Node.js does
-      final status = resourceResponse['status'] as String?;
-      final code = resourceResponse['code'];
-      final message = resourceResponse['message'] as String?;
-      
-      // Node.js: status.toLowerCase() !== 'success' && code !== 0 && message.toLowerCase() !== 'ok'
-      if (status?.toLowerCase() != 'success') {
-        print('[PARSER] API returned non-success status: $status, code: $code, message: $message');
-        return null;
-      }
-
-      final data = resourceResponse['data'] as List<dynamic>?;
-      
-      // Get bookmark for pagination - check if it exists (Node.js line 219)
-      final bookmark = resourceResponse['bookmark'] as String?;
-      
-      // Empty data is valid - it means no more pages
-      // But we need author info. If data is empty and no existing author, return null
-      if (data == null || data.isEmpty) {
-        print('[PARSER] Empty data array in response');
-        // Return empty result with no bookmark (signals end of pagination)
-        if (existingAuthor != null) {
-          return UserPinsResult.fromApiResponse(
-            author: existingAuthor,
-            pins: [],
-            bookmark: null, // No more pages
-          );
-        }
-        return null;
-      }
-
-      // Parse pins exactly like Node.js:
-      // { title, images: i?.images ?? [], videos: i?.videos ?? [], pinId: i.id, uploadDate: i.created_at }
-      final pins = <PinItem>[];
-      for (final item in data) {
-        if (item is Map<String, dynamic>) {
-          pins.add(PinItem.fromUserPinJson(item));
-        }
-      }
-
-      // Extract author from first pin's native_creator
-      Author? author = existingAuthor;
-      if (author == null) {
-        final firstItem = data.first as Map<String, dynamic>?;
-        final nativeCreator =
-            firstItem?['native_creator'] as Map<String, dynamic>?;
-        if (nativeCreator != null) {
-          author = Author(
-            username: nativeCreator['username'] as String? ?? '',
-            name: nativeCreator['full_name'] as String? ?? '',
-            userId: nativeCreator['id']?.toString() ?? '',
-          );
-        }
-      }
-
-      if (author == null) {
-        print('[PARSER] Could not extract author from response');
-        return null;
-      }
-
-      return UserPinsResult.fromApiResponse(
-        author: author,
-        pins: pins,
-        bookmark: bookmark,
-      );
-    } catch (e) {
-      print('[PARSER] Exception parsing user pins: $e');
-      return null;
-    }
   }
 
   /// Parse image data from single pin page HTML

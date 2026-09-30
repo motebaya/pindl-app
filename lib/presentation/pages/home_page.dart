@@ -90,11 +90,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
   // ── Foreground service initialization ──
 
   void _initForegroundService() {
-    final persistence = ref.read(taskStatePersistenceProvider);
-    _foregroundServiceManager = ForegroundServiceManager(
-      ref: ref,
-      persistence: persistence,
-    );
+    _foregroundServiceManager = ForegroundServiceManager(ref: ref);
     _foregroundServiceManager!.init();
 
     // Wire foreground service callbacks to JobNotifier
@@ -134,7 +130,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
     };
 
     // Check for interrupted tasks from previous session
-    _checkInterruptedTasks(persistence);
+    _checkInterruptedTasks(ref.read(taskStatePersistenceProvider));
   }
 
   /// Check Hive for interrupted tasks and prompt user to resume.

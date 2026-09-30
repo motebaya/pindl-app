@@ -27,11 +27,9 @@ object BootPluginAssert {
 
     /// name → (FQCN, allFlavors). The ffmpeg entry is allFlavors=false:
     /// asserted ONLY when [flavor] == "ffmpeg".
+    /// Phase 12.3/OQ-5: file_picker removed (dependency deleted — no Dart
+    /// call sites ever existed).
     private val expected: Map<String, Pair<String, Boolean>> = mapOf(
-        "file_picker" to
-            Pair("com.mr.flutter.plugin.filepicker.FilePickerPlugin", true),
-        "flutter_plugin_android_lifecycle" to
-            Pair("io.flutter.plugins.flutter_plugin_android_lifecycle.FlutterAndroidLifecyclePlugin", true),
         "path_provider_android" to
             Pair("io.flutter.plugins.pathprovider.PathProviderPlugin", true),
         "permission_handler_android" to
