@@ -15,6 +15,7 @@ import '../models/pin_item.dart';
 import '../models/pinterest_config.dart';
 import '../models/user_pins_result.dart';
 import '../parsers/pinterest_parser.dart';
+import '../pinterest/resources.dart';
 import 'log_service.dart';
 
 /// Pinterest extraction service
@@ -75,15 +76,17 @@ class PinterestExtractorService {
     }
   }
 
-  /// Get headers for Pinterest API calls with trace ID spoofing
-  Map<String, String> _getApiHeaders(String sourceUrl) {
+  /// Get headers for Pinterest API calls with trace ID spoofing.
+  /// [pwsHandler] is per-resource (Phase 09 registry); the default keeps the
+  /// historical user-pins value so existing call sites are unchanged.
+  Map<String, String> _getApiHeaders(String sourceUrl, {String? pwsHandler}) {
     final traceHeaders = TraceIdGenerator.generateHeaders();
     return {
       ...traceHeaders,
       'x-requested-with': 'XMLHttpRequest',
       'x-pinterest-source-url': sourceUrl,
       'x-pinterest-appstate': 'active',
-      'x-pinterest-pws-handler': 'www/[username].js',
+      'x-pinterest-pws-handler': pwsHandler ?? 'www/[username].js',
       if (_config != null) 'x-app-version': _config!.appVersion,
       'accept': 'application/json, text/javascript, */*, q=0.01',
       'sec-ch-ua-full-version-list': PinterestConstants.secChUa,
@@ -436,6 +439,83 @@ class PinterestExtractorService {
     }
   }
 
+  /// Phase 09.3 — registry-driven generic page fetch: the [_fetchSinglePage]
+  /// envelope semantics (plain-text GET, success-status gate,
+  /// resource_response extraction) applied to ANY registry resource, minus
+  /// the user-pins-specific author extraction. Additive: user-pins flow is
+  /// untouched. Failure returns null (mirroring [_fetchSinglePage]); cancel
+  /// still throws [CancelledException]. No production prints (log sink only).
+  Future<ResourcePage?> fetchResourcePage({
+    required PinterestResourceDef def,
+    required Map<String, dynamic> options,
+    required String sourceUrl,
+    String? bookmark,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      // Bookmark convention (user-pins parity): inject ONLY when present.
+      final effectiveOptions = {
+        ...options,
+        if (bookmark != null) 'bookmarks': [bookmark],
+      };
+      final url = def.buildUrl(
+        options: effectiveOptions,
+        sourceUrlOverride: sourceUrl,
+      );
+      final response = await retry(
+        () => _dio.get<String>(
+          url,
+          options: Options(
+            headers: _getApiHeaders(sourceUrl, pwsHandler: def.pwsHandler),
+            responseType: ResponseType.plain,
+          ),
+          cancelToken: cancelToken,
+        ),
+        cancelToken: cancelToken,
+        onLog: _logFetch,
+      );
+
+      if (response.data == null || response.data!.isEmpty) {
+        _logFetch('[ERROR] Empty response from ${def.name}');
+        return null;
+      }
+
+      Map<String, dynamic> jsonResponse;
+      try {
+        jsonResponse = jsonDecode(response.data!) as Map<String, dynamic>;
+      } on FormatException catch (e) {
+        _logFetch('[ERROR] ${def.name} response is not valid JSON: ${e.message}');
+        return null;
+      }
+
+      final resourceResponse =
+          jsonResponse['resource_response'] as Map<String, dynamic>?;
+      if (resourceResponse == null) {
+        _logFetch('[PARSER] No resource_response in ${def.name} response');
+        return null;
+      }
+
+      final status = resourceResponse['status'] as String?;
+      if (status?.toLowerCase() != 'success') {
+        _logFetch(
+            '[PARSER] ${def.name} API returned non-success status: $status');
+        return null;
+      }
+
+      return ResourcePage(
+        data: resourceResponse['data'] as List<dynamic>? ?? [],
+        bookmark: resourceResponse['bookmark'] as String?,
+      );
+    } on DioException catch (e) {
+      if (e.type == DioExceptionType.cancel) {
+        throw CancelledException();
+      }
+      _logFetch(
+          '[ERROR] Failed to fetch ${def.name}: ${e.message}');
+      return null;
+    }
+  }
+
   /// Get image from a single pin
   /// Ported from Pinterest.getImages()
   /// If no image but has video, returns thumbnail URL in imageUrl field
@@ -689,4 +769,17 @@ class PinterestExtractorService {
   void dispose() {
     _dio.close();
   }
+}
+
+/// One page of a registry resource response — [ResourcePage.data] rows plus
+/// the next-page bookmark when the feed continues (null = natural end).
+/// Pure data; board pagination (Phase 09.3) consumes it.
+class ResourcePage {
+  final List<dynamic> data;
+  final String? bookmark;
+
+  const ResourcePage({required this.data, this.bookmark});
+
+  /// True when a next page exists (non-empty bookmark).
+  bool get hasNext => bookmark != null && bookmark!.isNotEmpty;
 }
