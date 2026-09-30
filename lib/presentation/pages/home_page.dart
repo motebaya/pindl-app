@@ -408,6 +408,10 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                               if (jobState.discoveredBoards.isNotEmpty) ...[
                                 const SizedBox(height: 16),
                                 _buildBoardResultsSection(isDark, jobState, settings),
+                                if (jobState.boardSelection.isNotEmpty || jobState.isDownloading) ...[
+                                  const SizedBox(height: 16),
+                                  _buildBoardDownloadConfirmation(isDark, jobState, settings),
+                                ],
                               ],
                             ] else ...[
                               // Submit row (fetch info only)

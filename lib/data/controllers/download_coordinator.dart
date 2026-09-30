@@ -4,6 +4,7 @@ import '../../core/config/build_config.dart';
 import '../../core/persistence/metadata_schema.dart';
 import '../../core/utils/format_utils.dart';
 import '../models/author.dart';
+import '../models/board_selection.dart';
 import '../models/job_state.dart';
 import '../models/pin_item.dart';
 import '../services/download_service.dart';
@@ -236,7 +237,66 @@ class DownloadCoordinator {
         : 0;
   }
 
+  /// Phase 10.4 — board output folder (layout decision, D-39):
+  /// `PinDL/@<username>/Boards/<sanitized-slug>[-<boardId-suffix>]/`.
+  /// Slug = display/path identity (D-37) — path use is legitimate — but
+  /// slugs collide (boards-ux plan risk item), so a short boardId suffix is
+  /// appended deterministically on collision. Sanitized per STO-3 charset
+  /// rules (reuse [FormatUtils.sanitizeFilename] charset class).
+  static String boardFolder({
+    required String username,
+    required String slug,
+    required String boardId,
+    Set<String> usedFolders = const {},
+  }) {
+    final safeSlug =
+        FormatUtils.sanitizeFilename(slug).replaceAll(' ', '-');
+    final visibleSlug = safeSlug.isEmpty ? 'board' : safeSlug;
+    // Short identity suffix: last 6 chars of the numeric board id.
+    final idSuffix = boardId.length > 6
+        ? boardId.substring(boardId.length - 6)
+        : boardId;
+    var folder = 'PinDL/@$username/Boards/$visibleSlug-$idSuffix';
+    // Deterministic collision handling: extend the id suffix.
+    var take = 6;
+    while (usedFolders.contains(folder.toLowerCase())) {
+      take = (take + 2).clamp(6, boardId.length);
+      folder =
+          'PinDL/@$username/Boards/$visibleSlug-${boardId.substring(boardId.length - take)}';
+    }
+    return folder;
+  }
+
+  /// Plan sequential per-board runs from a [BoardSelection] (Phase 10.2,
+  /// D-38): each active board becomes one feed-shaped run with its own
+  /// base folder; sections mode resolves to the union of picked sections'
+  /// pins by the CALLER (fetch happens per board before this is invoked —
+  /// pure math here, no I/O). Order = selection display order.
+  static List<({BoardChoice choice, String baseFolder})> planBoardRuns({
+    required BoardSelection selection,
+    required String username,
+  }) {
+    final used = <String>{};
+    final runs = <({BoardChoice choice, String baseFolder})>[];
+    for (final choice in selection.active) {
+      final folder = boardFolder(
+        username: username,
+        slug: choice.slug,
+        boardId: choice.boardId,
+        usedFolders: used,
+      );
+      used.add(folder.toLowerCase());
+      runs.add((choice: choice, baseFolder: folder));
+    }
+    return runs;
+  }
+
   /// Runs the feed download (regular queue first, then HLS by flavor).
+  ///
+  /// Phase 10 (D-38): board jobs reuse this method with
+  /// [baseFolderOverride] (`PinDL/@user/Boards/<slug-id>/…`) — queue,
+  /// sliding window, HLS branches, completion-set math all identical.
+  /// Null (default) keeps the feed behavior byte-identical.
   /// [onStats] receives incremental deltas so the provider's copyWith state
   /// stays the single UI source of truth.
   Future<FeedDownloadResult> runFeedDownload({
@@ -254,9 +314,9 @@ class DownloadCoordinator {
     required int totalVideos,
     required int previousDownloaded,
     required int previousSkipped,
-    required int previousFailed,
-    required String? nextBookmark,
+    required int previousFailed,    required String? nextBookmark,
     required BookmarkContext? bookmarkContext,
+    String? baseFolderOverride,
     required void Function({
       int? downloadedDelta,
       int? skippedDelta,
@@ -267,7 +327,8 @@ class DownloadCoordinator {
     final stats = DownloadRunStats();
     final isVideoOnly = mediaType == MediaType.video;
     final username0 = author?.username ?? 'unknown';
-    final baseFolder = 'PinDL/@$username0';
+
+    final baseFolder = baseFolderOverride ?? 'PinDL/@$username0';
     final imagesFolder = '$baseFolder/Images';
     final videosFolder = '$baseFolder/Videos';
 

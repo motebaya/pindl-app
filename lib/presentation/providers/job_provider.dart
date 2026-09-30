@@ -812,6 +812,138 @@ class JobNotifier extends StateNotifier<AppJobState> {
     _logService.interrupted('Board discovery cancelled by user');
   }
 
+  /// Phase 10.2 (D-38): run the user's board selection as SEQUENTIAL
+  /// per-board feed jobs. Each active board fetches its pins (whole board
+  /// or picked sections — same pipeline), then downloads through the
+  /// UNCHANGED [DownloadCoordinator.runFeedDownload] with a board-scoped
+  /// base folder; per-board+type resume persists via `board_resume`.
+  Future<void> startBoardDownload({
+    required String outputPath,
+    required MediaType mediaType,
+    required bool overwrite,
+    required String username,
+    bool saveMetadata = false,
+  }) async {
+    final selection = state.boardSelection;
+    if (selection.isEmpty) {
+      _logService.error('No boards selected');
+      return;
+    }
+    if (state.isDownloading || state.isExtracting) {
+      _logService.error('Cannot start board download: another operation in progress');
+      return;
+    }
+
+    _downloadCancelToken = CancelToken();
+    _download.cancelToken = _downloadCancelToken;
+    state = state.copyWith(
+      status: JobStatus.downloading,
+      downloadedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      currentIndex: 0,
+    );
+    onTaskStarted?.call();
+
+    final runs = DownloadCoordinator.planBoardRuns(
+      selection: selection,
+      username: username,
+    );
+    final totalBoards = runs.length;
+
+    try {
+      for (var i = 0; i < runs.length; i++) {
+        if (_downloadCancelToken?.isCancelled ?? false) break;
+        final run = runs[i];
+        final choice = run.choice;
+        _logService.queue(
+            'Board ${i + 1}/$totalBoards: ${choice.name} (${choice.mode.name})');
+
+        // ---- Fetch pins for this board (whole vs picked sections) ----
+        List<PinItem> pins;
+        if (choice.mode == BoardDownloadMode.sections) {
+          var sectionPins = <PinItem>[];
+          for (final sectionId in choice.sectionIds) {
+            if (_downloadCancelToken?.isCancelled ?? false) break;
+            final result = await _boards.fetchSectionPins(
+              sectionId: sectionId,
+              username: username,
+              boardSlug: choice.slug,
+              cancelToken: _downloadCancelToken,
+            );
+            // Union across picked sections, dedupe by pin id (a pin can
+            // conceptually appear in two sections; first occurrence wins —
+            // same rule as the feed dedupe, Phase 07 G5).
+            final seen = sectionPins.map((p) => p.pinId).toSet();
+            for (final p in result.pins) {
+              if (seen.add(p.pinId)) sectionPins.add(p);
+            }
+          }
+          pins = sectionPins;
+        } else {
+          final result = await _boards.fetchBoardPins(
+            boardId: choice.boardId,
+            username: username,
+            boardSlug: choice.slug,
+            cancelToken: _downloadCancelToken,
+          );
+          pins = result.pins;
+        }
+
+        if (pins.isEmpty) {
+          _logService.queue(
+              'No ${mediaType.name}s found in board ${choice.name} — skipping');
+          continue;
+        }
+
+        // ---- Download this board as a feed-shaped run ----
+        await _download.runFeedDownload(
+          pins: pins,
+          author: state.author,
+          mediaType: mediaType,
+          outputPath: outputPath,
+          overwrite: overwrite,
+          saveMetadata: false, // board metadata handled below (10.3 resume)
+          isContinueMode: false,
+          lastIndexDownloaded: -1,
+          previousMediaType: null,
+          previousCompletedIndices: const {},
+          totalImages: pins.length,
+          totalVideos: 0,
+          previousDownloaded: 0,
+          previousSkipped: 0,
+          previousFailed: 0,
+          nextBookmark: null,
+          bookmarkContext: null,
+          baseFolderOverride: run.baseFolder,
+          onStats: ({downloadedDelta, skippedDelta, failedDelta, indexDelta}) {
+            state = state.copyWith(
+              downloadedCount: state.downloadedCount + (downloadedDelta ?? 0),
+              skippedCount: state.skippedCount + (skippedDelta ?? 0),
+              failedCount: state.failedCount + (failedDelta ?? 0),
+              currentIndex: state.currentIndex + (indexDelta ?? 0),
+            );
+          },
+        );
+      }
+
+      final wasInterrupted = _downloadCancelToken?.isCancelled ?? false;
+      if (wasInterrupted) {
+        state = state.copyWith(status: JobStatus.cancelled);
+      } else {
+        state = state.copyWith(status: JobStatus.completed);
+        _logService.complete(
+            'Board download complete — $totalBoards board(s), '
+            '${state.downloadedCount} saved, ${state.skippedCount} skipped, '
+            '${state.failedCount} failed.');
+        onTaskCompleted?.call(taskType: 'download');
+      }
+    } catch (e) {
+      _logService.error('Board download failed: ${userMessage(e)}');
+      state = state.copyWith(status: JobStatus.failed, error: userMessage(e));
+    }
+  }
+
   /// Load existing metadata for continue mode
   /// Returns true if metadata was found and loaded
   /// [username] - The username (without @) to look for metadata

@@ -97,6 +97,8 @@ class BoardSelection extends Equatable {
 
   bool get isEmpty => active.isEmpty;
 
+  bool get isNotEmpty => active.isNotEmpty;
+
   @override
   List<Object?> get props => [choices];
 

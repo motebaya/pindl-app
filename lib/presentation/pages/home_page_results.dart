@@ -486,4 +486,52 @@ extension _HomePageResults on _HomePageState {
       ),
     );
   }
+
+  /// Phase 10.2: board download confirmation — mirrors the feed confirm
+  /// row's semantics (media-type counts + Download button), driven by the
+  /// board selection instead of the feed state. Download button disabled
+  /// while a job runs.
+  Widget _buildBoardDownloadConfirmation(
+      bool isDark, AppJobState jobState, SettingsState settings) {
+    final selection = jobState.boardSelection;
+    final busy = jobState.isDownloading || jobState.isDiscoveringBoards;
+    final canStart = selection.isNotEmpty && !busy;
+    final mediaLabel =
+        settings.mediaType == MediaType.video ? 'videos' : 'images';
+
+    return Row(
+      children: [
+        Expanded(
+          child: SoftButton(
+            label: selection.isEmpty
+                ? 'No boards selected'
+                : 'Download ~${selection.estimatedPins} $mediaLabel '
+                    'from ${selection.boardCount} board(s)',
+            icon: Icons.download,
+            isLoading: jobState.isDownloading,
+            isDisabled: !canStart,
+            onPressed: canStart
+                ? () => ref.read(jobProvider.notifier).startBoardDownload(
+                      outputPath: 'Download', // fixed output root, like feed flow
+                      mediaType: settings.mediaType,
+                      overwrite: settings.overwrite,
+                      username: PinUrlValidator.normalizeUsername(
+                          _inputController.text),
+                      saveMetadata: settings.saveMetadata,
+                    )
+                : null,
+          ),
+        ),
+        if (jobState.isDownloading) ...[
+          const SizedBox(width: 12),
+          SoftIconButton(
+            icon: Icons.stop,
+            iconColor: AppColors.error,
+            tooltip: 'Stop board download',
+            onPressed: () => ref.read(jobProvider.notifier).cancelDownload(),
+          ),
+        ],
+      ],
+    );
+  }
 }
