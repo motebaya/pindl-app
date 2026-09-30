@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pindl/data/models/board.dart';
 import 'package:pindl/data/models/board_section.dart';
 import 'package:pindl/data/models/board_selection.dart';
 

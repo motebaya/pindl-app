@@ -96,7 +96,13 @@ class PinItem extends Equatable {
 
     return PinItem(
       pinId: json['id']?.toString() ?? json['pinId']?.toString() ?? '',
-      title: json['title'] as String? ?? '',
+      // Phase 10.6 device-evidence fix: board rows may carry `title` as a
+      // Map (rich-pin payloads) — a hard cast crashed the whole board job
+      // (raw error: `_Map<String, dynamic>' is not a subtype of 'String?'`;
+      // stack: fromUserPinJson → BoardController._fetchPinFeed). Tolerant
+      // read: String passes through, anything else (null/Map) → ''. Same
+      // user-pins feed benefits when rows surface rich metadata.
+      title: json['title'] is String ? json['title'] as String : '',
       imageUrl: imageUrl,
       videoUrl: videoUrl,
       thumbnail: thumbnail,

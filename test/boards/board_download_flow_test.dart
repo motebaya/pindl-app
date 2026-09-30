@@ -1,7 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pindl/data/controllers/download_coordinator.dart';
-import 'package:pindl/data/models/board.dart';
-import 'package:pindl/data/models/board_section.dart';
 import 'package:pindl/data/models/board_selection.dart';
 import 'package:pindl/data/models/job_state.dart';
 import 'package:pindl/data/models/pin_item.dart';

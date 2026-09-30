@@ -359,16 +359,6 @@ class _BoardAdapter implements HttpClientAdapter {
   String? lastPwsHandler;
   String? lastSourceUrl;
 
-  Map<String, dynamic> _defaultFor(String path) {
-    if (path == '/resource/BoardsResource/get/') {
-      return Fixtures.boardsPage1();
-    }
-    if (path == '/resource/BoardSectionsResource/get/') {
-      return Fixtures.boardSectionsPage1();
-    }
-    return _pinsEnvelope(bookmark: null, rows: []);
-  }
-
   @override
   void close({bool force = false}) {}
 
