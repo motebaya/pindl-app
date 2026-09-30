@@ -18,6 +18,7 @@ import '../../data/services/download_service.dart';
 import '../../data/services/hls_converter.dart';
 import '../../data/services/hls_service.dart';
 import '../../data/services/log_service.dart';
+import '../../data/controllers/download_coordinator.dart';
 import '../../data/controllers/extraction_controller.dart';
 import '../../data/services/pinterest_extractor_service.dart';
 import '../../data/services/task_state_persistence.dart';
@@ -227,6 +228,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
   final PinterestExtractorService _extractor;
   final ExtractionController _extraction;
   final DownloadService _downloadService;
+  late final DownloadCoordinator _download;
   final HlsService? _hlsService;
   final HlsConverter? _hlsConverter;
   final TaskStatePersistence? _persistence;
@@ -291,7 +293,49 @@ class JobNotifier extends StateNotifier<AppJobState> {
         _hlsConverter = BuildConfig.enableFfmpeg ? (hlsConverter ?? HlsConverter()) : null,
         _persistence = persistence,
         _onDownloadComplete = onDownloadComplete,
-        super(const AppJobState());
+        super(const AppJobState()) {
+    _download = DownloadCoordinator(
+      downloadService: _downloadService,
+      hlsService: _hlsService,
+      hlsConverter: _hlsConverter,
+      hooks: DownloadCoordinatorHooks(
+        queue: _logService.queue,
+        downloading: _logService.downloading,
+        saved: _logService.saved,
+        skipped: _logService.skipped,
+        failed: _logService.error,
+        parse: _logService.parse,
+        error: _logService.error,
+        interrupted: _logService.interrupted,
+        complete: _logService.complete,
+        onFfmpegLog: (log) {
+          // Only log important messages (not every frame)
+          if (log.contains('frame=') && log.contains('fps=')) {
+            // Skip verbose frame logs
+          } else if (log.isNotEmpty) {
+            print('[FFmpeg] $log');
+          }
+        },
+        onHistory: ({required filename, required url, required success, errorMessage}) {
+          _onDownloadComplete?.call(
+            filename: filename,
+            url: url,
+            status: success ? HistoryStatus.success : HistoryStatus.failed,
+            errorMessage: errorMessage,
+          );
+        },
+        mapError: userMessage,
+        onPersistedProgress: ({required currentIndex, skippedCount, failedCount, failedPinId}) {
+          _updatePersistedProgress(
+            currentIndex: currentIndex,
+            skippedCount: skippedCount,
+            failedCount: failedCount,
+            failedPinId: failedPinId,
+          );
+        },
+      ),
+    );
+  }
 
   /// Start info extraction (Submit button) - Phase B
   /// This only fetches metadata, does NOT start downloading
@@ -724,7 +768,11 @@ class JobNotifier extends StateNotifier<AppJobState> {
   }
 
   /// Start download (Download button) - Phase D
-  /// Only callable from Phase C (readyToDownload)
+  /// Only callable from Phase C (readyToDownload).
+  ///
+  /// Phase 08 (08.2): the feed queue + HLS branches live in the
+  /// DownloadCoordinator; single-pin stays a direct DownloadService flow
+  /// (no queue). This method remains the state-machine adapter.
   Future<void> startDownload({
     required String outputPath,
     required MediaType mediaType,
@@ -740,7 +788,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
     }
 
     _downloadCancelToken = CancelToken();
-    
+    _download.cancelToken = _downloadCancelToken;
+
     // Transition to Phase D: downloading
     state = state.copyWith(
       status: JobStatus.downloading,
@@ -765,7 +814,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
       // Handle single pin result
       if (state.singlePinResult != null) {
         await _downloadSinglePin(
-          outputPath, 
+          outputPath,
           overwrite,
           downloadImage: downloadImage,
           downloadVideo: downloadVideo,
@@ -774,8 +823,79 @@ class JobNotifier extends StateNotifier<AppJobState> {
         return;
       }
 
-      // Handle user pins
-      await _downloadUserPins(outputPath, mediaType, overwrite, saveMetadata: saveMetadata);
+      // Handle user pins via the download coordinator (queue + HLS).
+      final result = await _download.runFeedDownload(
+        pins: state.pins,
+        author: state.author,
+        mediaType: mediaType,
+        outputPath: outputPath,
+        overwrite: overwrite,
+        saveMetadata: saveMetadata,
+        isContinueMode: state.isContinueMode,
+        lastIndexDownloaded: state.lastIndexDownloaded,
+        previousMediaType: state.previousMediaType,
+        previousCompletedIndices: state.previousCompletedIndices,
+        totalImages: state.totalImages,
+        totalVideos: state.totalVideos,
+        previousDownloaded: state.previousDownloaded,
+        previousSkipped: state.previousSkipped,
+        previousFailed: state.previousFailed,
+        nextBookmark: state.nextBookmark,
+        bookmarkContext: state.bookmarkContext,
+        onStats: ({downloadedDelta, skippedDelta, failedDelta, indexDelta}) {
+          state = state.copyWith(
+            downloadedCount: state.downloadedCount + (downloadedDelta ?? 0),
+            skippedCount: state.skippedCount + (skippedDelta ?? 0),
+            failedCount: state.failedCount + (failedDelta ?? 0),
+            currentIndex: state.currentIndex + (indexDelta ?? 0),
+          );
+        },
+      );
+
+      // Early exits replicate the old edge paths exactly (no finalization
+      // side effects, previous counters on the all-downloaded path).
+      if (result.earlyExit == FeedEarlyExit.noItems) {
+        state = state.copyWith(status: JobStatus.completed);
+        return;
+      }
+      if (result.earlyExit == FeedEarlyExit.allDownloaded) {
+        state = state.copyWith(
+          status: JobStatus.completed,
+          downloadedCount: state.previousDownloaded,
+          skippedCount: state.previousSkipped,
+          failedCount: state.previousFailed,
+        );
+        return;
+      }
+
+      final wasInterrupted = result.wasInterrupted || (state.status == JobStatus.cancelled);
+
+      // Save user metadata if requested (to PinDL/@username/<userId>.json)
+      final write = result.metadataWrite;
+      if (saveMetadata && write != null) {
+        await _saveMetadata(write.subFolder, write.filename, write.json);
+      }
+
+      if (!wasInterrupted) {
+        state = state.copyWith(
+          status: JobStatus.completed,
+          imagesFullyDownloaded: mediaType == MediaType.image
+              ? true
+              : state.imagesFullyDownloaded,
+          videosFullyDownloaded: mediaType == MediaType.video
+              ? true
+              : state.videosFullyDownloaded,
+        );
+        _completePersistedTask();
+        // Notify foreground service manager that download completed
+        onTaskCompleted?.call(taskType: 'download');
+      }
+
+      final sessionStats = '${state.downloadedCount} downloaded, ${state.skippedCount} skipped, ${state.failedCount} failed';
+
+      _logService.complete(
+        'Download ${wasInterrupted ? "interrupted" : "complete"}. $sessionStats',
+      );
     } catch (e) {
       _logService.error('Download failed: $e');
       state = state.copyWith(
@@ -785,8 +905,11 @@ class JobNotifier extends StateNotifier<AppJobState> {
     }
   }
 
+  /// Single-pin download flow (no queue): image/thumbnail or carousel slots,
+  /// then video; per-item counting and history. Phase 08: kept provider-side
+  /// (it touches only DownloadService + _saveMetadata), slimmed of queue logic.
   Future<void> _downloadSinglePin(
-    String outputPath, 
+    String outputPath,
     bool overwrite, {
     required bool downloadImage,
     required bool downloadVideo,
@@ -796,7 +919,54 @@ class JobNotifier extends StateNotifier<AppJobState> {
     int downloaded = 0;
     int skipped = 0;
     int failed = 0;
-    
+
+    Future<void> downloadOne({
+      required String url,
+      required String filename,
+      required String pinId,
+    }) async {
+      _logService.downloading('Downloading $filename');
+      try {
+        await _downloadService.downloadFile(
+          url: url,
+          outputPath: outputPath,
+          filename: filename,
+          pinId: pinId,
+          overwrite: overwrite,
+        );
+        _logService.saved('Saved: $filename');
+        downloaded++;
+        _onDownloadComplete?.call(
+          filename: filename,
+          url: url,
+          status: HistoryStatus.success,
+        );
+      } on DownloadException catch (e) {
+        if (e.message.contains('already exists')) {
+          _logService.skipped('Skipped: $filename (exists)');
+          skipped++;
+        } else {
+          _logService.error('Failed: $filename - ${e.message}');
+          failed++;
+          _onDownloadComplete?.call(
+            filename: filename,
+            url: url,
+            status: HistoryStatus.failed,
+            errorMessage: e.message,
+          );
+        }
+      } catch (e) {
+        _logService.error('Failed: $filename - $e');
+        failed++;
+        _onDownloadComplete?.call(
+          filename: filename,
+          url: url,
+          status: HistoryStatus.failed,
+          errorMessage: userMessage(e),
+        );
+      }
+    }
+
     // Download thumbnail/image if requested
     if (downloadImage) {
       // Phase 07 (07.3): carousel pins yield one download per slot, in slot
@@ -812,159 +982,46 @@ class JobNotifier extends StateNotifier<AppJobState> {
             url: slotUrl,
             imageIndex: i + 1,
           );
-          _logService.downloading('Downloading carousel image: $filename');
-          try {
-            await _downloadService.downloadFile(
-              url: slotUrl,
-              outputPath: outputPath,
-              filename: filename,
-              pinId: '${result.pinId}_img$i',
-              overwrite: overwrite,
-            );
-            _logService.saved('Saved: $filename');
-            downloaded++;
-            _onDownloadComplete?.call(
-              filename: filename,
-              url: slotUrl,
-              status: HistoryStatus.success,
-            );
-          } on DownloadException catch (e) {
-            if (e.message.contains('already exists')) {
-              _logService.skipped('Skipped: $filename (exists)');
-              skipped++;
-            } else {
-              _logService.error('Failed: $filename - ${e.message}');
-              failed++;
-              _onDownloadComplete?.call(
-                filename: filename,
-                url: slotUrl,
-                status: HistoryStatus.failed,
-                errorMessage: e.message,
-              );
-            }
-          } catch (e) {
-            _logService.error('Failed: $filename - $e');
-            failed++;
-            _onDownloadComplete?.call(
-              filename: filename,
-              url: slotUrl,
-              status: HistoryStatus.failed,
-              errorMessage: userMessage(e),
-            );
-          }
+          await downloadOne(
+            url: slotUrl,
+            filename: filename,
+            pinId: '${result.pinId}_img$i',
+          );
         }
-        // Carousel handled; fall through to the video branch only.
-      } else
-      {
-      final imageUrl = result.getImageDownloadUrl(useThumbnailForVideo: true);
-      if (imageUrl != null) {
-        // Deterministic filename: <pinId>_image.jpg or <pinId>_thumbnail.jpg
-        final role = (result.hasVideoContent && !result.hasImage) ? 'thumbnail' : 'image';
-        final filename = FormatUtils.pinFilename(pinId: result.pinId, role: role, url: imageUrl);
-        _logService.downloading('Downloading image: $filename');
-        
-        try {
-          await _downloadService.downloadFile(
+      } else {
+        final imageUrl = result.getImageDownloadUrl(useThumbnailForVideo: true);
+        if (imageUrl != null) {
+          // Deterministic filename: <pinId>_image.jpg or <pinId>_thumbnail.jpg
+          final role = (result.hasVideoContent && !result.hasImage) ? 'thumbnail' : 'image';
+          final filename = FormatUtils.pinFilename(pinId: result.pinId, role: role, url: imageUrl);
+          await downloadOne(
             url: imageUrl,
-            outputPath: outputPath,
             filename: filename,
             pinId: '${result.pinId}_img',
-            overwrite: overwrite,
-          );
-          _logService.saved('Saved: $filename');
-          downloaded++;
-          
-          // Record to download history
-          _onDownloadComplete?.call(
-            filename: filename,
-            url: imageUrl,
-            status: HistoryStatus.success,
-          );
-        } on DownloadException catch (e) {
-          if (e.message.contains('already exists')) {
-            _logService.skipped('Skipped: $filename (exists)');
-            skipped++;
-          } else {
-            _logService.error('Failed: $filename - ${e.message}');
-            failed++;
-            _onDownloadComplete?.call(
-              filename: filename,
-              url: imageUrl,
-              status: HistoryStatus.failed,
-              errorMessage: e.message,
-            );
-          }
-        } catch (e) {
-          _logService.error('Failed: $filename - $e');
-          failed++;
-          _onDownloadComplete?.call(
-            filename: filename,
-            url: imageUrl,
-            status: HistoryStatus.failed,
-            errorMessage: userMessage(e),
           );
         }
       }
-      } // single-image path (non-carousel)
     }
-    
+
     // Download video if requested
     if (downloadVideo && result.hasVideoContent) {
       final videoUrl = result.videoUrl;
       if (videoUrl != null) {
         // Deterministic filename: <pinId>_video.mp4
         final filename = FormatUtils.pinFilename(pinId: result.pinId, role: 'video', url: videoUrl);
-        _logService.downloading('Downloading video: $filename');
-        
-        try {
-          await _downloadService.downloadFile(
-            url: videoUrl,
-            outputPath: outputPath,
-            filename: filename,
-            pinId: '${result.pinId}_vid',
-            overwrite: overwrite,
-          );
-          _logService.saved('Saved: $filename');
-          downloaded++;
-          
-          // Record to download history
-          _onDownloadComplete?.call(
-            filename: filename,
-            url: videoUrl,
-            status: HistoryStatus.success,
-          );
-        } on DownloadException catch (e) {
-          if (e.message.contains('already exists')) {
-            _logService.skipped('Skipped: $filename (exists)');
-            skipped++;
-          } else {
-            _logService.error('Failed: $filename - ${e.message}');
-            failed++;
-            _onDownloadComplete?.call(
-              filename: filename,
-              url: videoUrl,
-              status: HistoryStatus.failed,
-              errorMessage: e.message,
-            );
-          }
-        } catch (e) {
-          _logService.error('Failed: $filename - $e');
-          failed++;
-          _onDownloadComplete?.call(
-            filename: filename,
-            url: videoUrl,
-            status: HistoryStatus.failed,
-            errorMessage: userMessage(e),
-          );
-        }
+        await downloadOne(
+          url: videoUrl,
+          filename: filename,
+          pinId: '${result.pinId}_vid',
+        );
       }
     }
-    
+
     // Save metadata if requested (single pin goes to PinDL/metadata/)
     if (saveMetadata && result.rawJson != null) {
       await _saveMetadata('PinDL/metadata', '${result.metadataId}.json', result.rawJson!);
     }
-    
+
     state = state.copyWith(
       status: JobStatus.completed,
       downloadedCount: downloaded,
@@ -977,17 +1034,18 @@ class JobNotifier extends StateNotifier<AppJobState> {
           ? true
           : state.videosFullyDownloaded,
     );
-    
+
     _logService.complete('Download complete. Downloaded: $downloaded, Skipped: $skipped, Failed: $failed');
   }
-  
+
+
   /// Save metadata JSON file via method channel (works on Android 11+)
   /// [subFolder] - relative path under Downloads, e.g. "PinDL/@username" or "PinDL/metadata"
   Future<void> _saveMetadata(String subFolder, String filename, Map<String, dynamic> json) async {
     try {
       const encoder = JsonEncoder.withIndent('  ');
       final jsonString = encoder.convert(json);
-      
+
       if (Platform.isAndroid) {
         // Use method channel to save via MediaStore
         await _mediaChannel.invokeMethod('saveTextToFile', {
@@ -1009,417 +1067,6 @@ class JobNotifier extends StateNotifier<AppJobState> {
     } catch (e) {
       _logService.error('Failed to save metadata: $e');
     }
-  }
-
-  Future<void> _downloadUserPins(
-    String outputPath,
-    MediaType mediaType,
-    bool overwrite, {
-    bool saveMetadata = false,
-  }) async {
-    final pins = state.pins;
-    final author = state.author;
-    final isVideoOnly = mediaType == MediaType.video;
-    
-    // Build folder paths: PinDL/@username/Images or PinDL/@username/Videos
-    final username = author?.username ?? 'unknown';
-    final baseFolder = 'PinDL/@$username';
-    final imagesFolder = '$baseFolder/Images';
-    final videosFolder = '$baseFolder/Videos';
-    
-    // Build download queue following Node.js logic:
-    // - If user selects ONLY "video": download only videos.video_list.V_720P.url
-    // - If user selects ONLY "image": download images.orig.url AND video thumbnails
-    // - (Note: current UI only allows single selection for username mode)
-    
-    // Aggregate all URLs to download
-    // Added isHls flag for HLS video conversion support
-    // role: 'video', 'image', or 'thumbnail' — used for deterministic filename generation
-    final List<({String pinId, String title, String url, bool isVideo, bool isHls, String subFolder, String role})> downloadItems = [];
-    
-    for (final pin in pins) {
-      if (isVideoOnly) {
-        // Video mode: only download video URLs
-        if (pin.hasVideo && pin.videoUrl?.url != null) {
-          // Check if this is an HLS video that needs conversion
-          final isHls = pin.videoUrl!.isHls;
-          downloadItems.add((
-            pinId: pin.pinId,
-            title: pin.title,
-            url: pin.videoUrl!.url,
-            isVideo: true,
-            isHls: isHls,
-            subFolder: videosFolder,
-            role: 'video',
-          ));
-        }
-      } else {
-        // Image mode: download image URLs (and thumbnails for video pins)
-        if (pin.hasImage && pin.imageUrl != null) {
-          downloadItems.add((
-            pinId: pin.pinId,
-            title: pin.title,
-            url: pin.imageUrl!,
-            isVideo: false,
-            isHls: false,
-            subFolder: imagesFolder,
-            role: 'image',
-          ));
-        } else if (pin.hasVideo && pin.thumbnail != null) {
-          // For video pins without separate image, download thumbnail
-          downloadItems.add((
-            pinId: pin.pinId,
-            title: pin.title,
-            url: pin.thumbnail!,
-            isVideo: false,
-            isHls: false,
-            subFolder: imagesFolder,
-            role: 'thumbnail',
-          ));
-        }
-      }
-    }
-    
-    if (downloadItems.isEmpty) {
-      _logService.error('No ${mediaType.name}s found in pins');
-      state = state.copyWith(
-        status: JobStatus.completed,
-      );
-      return;
-    }
-    
-    // In continue mode, skip items up to lastIndexDownloaded — but ONLY when
-    // the current media type matches the previously downloaded media type.
-    // If the user switches types (e.g. images → videos), start from 0.
-    final bool sameMediaType = state.previousMediaType == null || 
-        state.previousMediaType == mediaType.name;
-    final startIndex = state.isContinueMode && state.lastIndexDownloaded >= 0 && sameMediaType
-        ? state.lastIndexDownloaded + 1 
-        : 0;
-    
-    if (startIndex >= downloadItems.length) {
-      _logService.complete('All items already downloaded!');
-      state = state.copyWith(
-        status: JobStatus.completed,
-        downloadedCount: state.previousDownloaded,
-        skippedCount: state.previousSkipped,
-        failedCount: state.previousFailed,
-      );
-      return;
-    }
-    
-    // Filter items to download (skip already completed ones)
-    final itemsToDownload = downloadItems.sublist(startIndex);
-    
-    // Log aggregation stats (including HLS count)
-    final videoCount = itemsToDownload.where((i) => i.isVideo).length;
-    final hlsCount = itemsToDownload.where((i) => i.isHls).length;
-    final mp4Count = videoCount - hlsCount;
-    final imageCount = itemsToDownload.where((i) => !i.isVideo).length;
-    
-    if (state.isContinueMode) {
-      _logService.queue('Continue mode: skipping first $startIndex items');
-      _logService.queue('Remaining to download: $imageCount images, $videoCount videos (${mp4Count} MP4, $hlsCount HLS), total ${itemsToDownload.length} items');
-    } else {
-      _logService.queue('To be downloaded: $imageCount images, $videoCount videos (${mp4Count} MP4, $hlsCount HLS)');
-    }
-    if (hlsCount > 0) {
-      if (BuildConfig.enableFfmpeg) {
-        _logService.queue('HLS videos will be converted to MP4 using FFmpeg');
-      } else {
-        _logService.queue('Lite mode: HLS videos will be fetched via single-pin extraction');
-      }
-    }
-    _logService.queue('Output: Downloads/$baseFolder');
-    
-    // Build a map of pinId -> (url, filename) for history tracking
-    final Map<String, (String url, String filename)> pinUrlMap = {};
-    
-    // D-04 resume truth: the completion sets are authoritative; the derived
-    // v1-compatible last_index_downloaded is computed at write time via
-    // maxContiguous(session ∪ previous) inside MetadataReader.buildV2Metadata.
-    
-    // Separate HLS items (need special processing) from regular items
-    final hlsItems = itemsToDownload.where((i) => i.isHls).toList();
-    final regularItems = itemsToDownload.where((i) => !i.isHls).toList();
-    
-    // Add regular items to download queue
-    for (var i = 0; i < regularItems.length; i++) {
-      final item = regularItems[i];
-      // Deterministic filename based on pinId and role
-      final filename = FormatUtils.pinFilename(pinId: item.pinId, role: item.role, url: item.url);
-      pinUrlMap[item.pinId] = (item.url, filename);
-      
-      _downloadService.enqueue(
-        id: '${item.pinId}_${startIndex + i}',
-        pinId: item.pinId,
-        title: item.title.isEmpty ? item.pinId : item.title,
-        url: item.url,
-        outputPath: outputPath,
-        filename: filename,
-        overwrite: overwrite,
-        subFolder: item.subFolder,
-      );
-    }
-    
-    // D-04 completion-set tracking: indices are absolute (downloadItems
-    // coordinates). The previous session's set merges only when the media
-    // type matches (otherwise indices refer to a different item list).
-    final sessionCompleted = <int>{};
-    final previousCompleted = sameMediaType ? state.previousCompletedIndices : const <int>{};
-    final regularIndexByPin = <String, int>{
-      for (var i = 0; i < regularItems.length; i++) regularItems[i].pinId: startIndex + i,
-    };
-
-    // Process regular queue first
-    if (regularItems.isNotEmpty) {
-      await _downloadService.processQueue(
-        overwrite: overwrite,
-        subFolder: isVideoOnly ? videosFolder : imagesFolder,
-        onCompleted: (pinId) {
-          _logService.saved('Saved: $pinId');
-          // D-04: success = complete → enters the completion set.
-          final idx = regularIndexByPin[pinId];
-          if (idx != null) sessionCompleted.add(idx);
-
-          state = state.copyWith(
-            downloadedCount: state.downloadedCount + 1,
-            currentIndex: state.currentIndex + 1,
-          );
-          
-          final info = pinUrlMap[pinId];
-          if (info != null) {
-            _onDownloadComplete?.call(
-              filename: info.$2,
-              url: info.$1,
-              status: HistoryStatus.success,
-            );
-          }
-        },
-        onSkipped: (pinId, reason) {
-          _logService.skipped('Skipped $pinId: $reason');
-          // D-04: explicit skip = complete → enters the completion set.
-          final idx = regularIndexByPin[pinId];
-          if (idx != null) sessionCompleted.add(idx);
-
-          state = state.copyWith(
-            skippedCount: state.skippedCount + 1,
-            currentIndex: state.currentIndex + 1,
-          );
-          _updatePersistedProgress(
-            currentIndex: state.currentIndex,
-            skippedCount: state.skippedCount,
-          );
-        },
-        onFailed: (pinId, error) {
-          _logService.error('Failed $pinId: $error');
-          // D-04: failed = INCOMPLETE → hole; NOT in the completion set;
-          // continue re-offers it. Index bookkeeping still advances.
-
-          state = state.copyWith(
-            failedCount: state.failedCount + 1,
-            currentIndex: state.currentIndex + 1,
-          );
-          _updatePersistedProgress(
-            currentIndex: state.currentIndex,
-            failedCount: state.failedCount,
-            failedPinId: pinId,
-          );
-          
-          final info = pinUrlMap[pinId];
-          if (info != null) {
-            _onDownloadComplete?.call(
-              filename: info.$2,
-              url: info.$1,
-              status: HistoryStatus.failed,
-              errorMessage: error,
-            );
-          }
-        },
-      );
-    }
-    
-    // Process HLS items — strategy depends on build flavor
-    if (BuildConfig.enableFfmpeg && _hlsService != null && _hlsConverter != null) {
-      // ── FFmpeg build: HLS parsing + FFmpeg conversion ──
-      for (var i = 0; i < hlsItems.length; i++) {
-        if (_downloadCancelToken?.isCancelled ?? false) break;
-        
-        final item = hlsItems[i];
-        final outputFilename = FormatUtils.pinFilename(pinId: item.pinId, role: 'video', url: item.url);  // HLS -> MP4
-        pinUrlMap[item.pinId] = (item.url, outputFilename);
-        
-        _logService.downloading('HLS video: Fetching playlist for ${item.pinId}...');
-        
-        try {
-          // Step 1: Check if output file already exists (skip if overwrite is false)
-          if (!overwrite) {
-            final exists = await _downloadService.fileExistsInDownloads(outputFilename, videosFolder);
-            if (exists) {
-              _logService.skipped('Skipped ${item.pinId}: File exists');
-              sessionCompleted.add(startIndex + regularItems.length + i);
-
-              state = state.copyWith(
-                skippedCount: state.skippedCount + 1,
-                currentIndex: state.currentIndex + 1,
-              );
-              continue;
-            }
-          }
-          
-          // Step 2: Fetch and parse HLS master playlist
-          final hlsResult = await _hlsService.fetchAndParse(item.url);
-          
-          if (!hlsResult.success) {
-            throw Exception('HLS parse failed: ${hlsResult.errorMessage}');
-          }
-          
-          _logService.parse('HLS variant: ${hlsResult.width}x${hlsResult.height} @ ${hlsResult.bandwidth ?? 0} bps');
-          
-          // Step 3: Convert HLS to MP4 using FFmpeg
-          _logService.downloading('Converting HLS -> MP4...');
-          
-          final conversionResult = await _hlsConverter.convertToMp4(
-            videoM3u8Url: hlsResult.videoVariantUrl!,
-            audioM3u8Url: hlsResult.audioUrl,
-            outputFilename: outputFilename,
-            onLog: (log) {
-              // Only log important messages (not every frame)
-              if (log.contains('frame=') && log.contains('fps=')) {
-                // Skip verbose frame logs
-              } else if (log.isNotEmpty) {
-                print('[FFmpeg] $log');
-              }
-            },
-            cancelToken: _downloadCancelToken,
-          );
-          
-          if (!conversionResult.success) {
-            if (conversionResult.wasCancelled) {
-              // Phase 05 truth table: cancelled = INCOMPLETE (re-offered on
-              // continue) — never counted failed, no history entry.
-              _logService.interrupted('HLS conversion cancelled: ${item.pinId}');
-              continue;
-            }
-            throw Exception('FFmpeg conversion failed: ${conversionResult.errorMessage}');
-          }
-          
-          // Step 4: Move converted MP4 to public Downloads
-          final savedPath = await _downloadService.saveFileToDownloads(
-            conversionResult.outputPath!,
-            outputFilename,
-            videosFolder,
-            overwrite: overwrite,
-          );
-          
-          if (savedPath != null) {
-            _logService.saved('Saved: $outputFilename');
-            sessionCompleted.add(startIndex + regularItems.length + i);
-
-            state = state.copyWith(
-              downloadedCount: state.downloadedCount + 1,
-              currentIndex: state.currentIndex + 1,
-            );
-            
-            _onDownloadComplete?.call(
-              filename: outputFilename,
-              url: item.url,
-              status: HistoryStatus.success,
-            );
-          } else {
-            throw Exception('Failed to save converted file to Downloads');
-          }
-        } catch (e) {
-          _logService.error('HLS failed ${item.pinId}: $e');
-
-          state = state.copyWith(
-            failedCount: state.failedCount + 1,
-            currentIndex: state.currentIndex + 1,
-          );
-          
-          _onDownloadComplete?.call(
-            filename: outputFilename,
-            url: item.url,
-            status: HistoryStatus.failed,
-            errorMessage: userMessage(e),
-          );
-        }
-      }
-    } else {
-      // ── Lite build: HLS conversion unsupported — honest skip (HLS-4/05.5).
-      // The old "fallback" re-fetched the pin page for a direct MP4 the feed
-      // already proved absent — a guaranteed failure after a wasted request.
-      // Now: skip upfront with an explicit reason; explicit skip = complete
-      // per the truth table (in the set; not re-offered on continue).
-      if (hlsItems.isNotEmpty) {
-        _logService.queue(
-            '${hlsItems.length} HLS video(s) skipped — require the FFmpeg build');
-      }
-      for (var i = 0; i < hlsItems.length; i++) {
-        if (_downloadCancelToken?.isCancelled ?? false) break;
-        final item = hlsItems[i];
-        _logService.skipped('Skipped ${item.pinId}: HLS video — requires FFmpeg build');
-        sessionCompleted.add(startIndex + regularItems.length + i);
-        state = state.copyWith(
-          skippedCount: state.skippedCount + 1,
-          currentIndex: state.currentIndex + 1,
-        );
-      }
-    }
-    
-    // Check if download was cancelled/interrupted - save resume stats
-    final wasInterrupted = state.status == JobStatus.cancelled;
-    
-    // Accumulate counts across sessions:
-    // success_downloaded = previous sessions' total + this session's count
-    final totalDownloaded = state.previousDownloaded + state.downloadedCount;
-    final totalSkipped = state.previousSkipped + state.skippedCount;
-    final totalFailed = state.previousFailed + state.failedCount;
-    
-    // Save user metadata if requested (to PinDL/@username/<userId>.json)
-    // Phase 04: schema v2 — carries the authoritative completion set
-    // (D-04 truth table) + v1-compatible derived fields.
-    if (saveMetadata && author != null) {
-      final mergedCompleted = sessionCompleted.union(
-        sameMediaType ? previousCompleted : const <int>{},
-      );
-      final metadataJson = MetadataReader.buildV2Metadata(
-        author: author,
-        pins: pins,
-        completedIndices: mergedCompleted,
-        totalImages: state.totalImages,
-        totalVideos: state.totalVideos,
-        successDownloaded: totalDownloaded,
-        skipDownloaded: totalSkipped,
-        failedDownloaded: totalFailed,
-        wasInterrupted: wasInterrupted,
-        mediaType: mediaType.name,
-        nextBookmark: state.nextBookmark,
-        bookmarkContext: state.bookmarkContext,
-      );
-      await _saveMetadata(baseFolder, '${author.userId}.json', metadataJson);
-    }
-    
-    if (!wasInterrupted) {
-      state = state.copyWith(
-        status: JobStatus.completed,
-        imagesFullyDownloaded: mediaType == MediaType.image
-            ? true
-            : state.imagesFullyDownloaded,
-        videosFullyDownloaded: mediaType == MediaType.video
-            ? true
-            : state.videosFullyDownloaded,
-      );
-      _completePersistedTask();
-      // Notify foreground service manager that download completed
-      onTaskCompleted?.call(taskType: 'download');
-    }
-    
-    final sessionStats = '${state.downloadedCount} downloaded, ${state.skippedCount} skipped, ${state.failedCount} failed';
-    
-    _logService.complete(
-      'Download ${wasInterrupted ? "interrupted" : "complete"}. $sessionStats',
-    );
   }
 
   /// Cancel download (Phase D only)
