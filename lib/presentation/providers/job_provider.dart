@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/config/build_config.dart';
 import '../../core/exceptions/pinterest_exception.dart';
+import '../../core/persistence/board_resume.dart';
 import '../../core/persistence/metadata_schema.dart';
 import '../../core/utils/format_utils.dart';
 import '../../core/utils/pin_url_validator.dart';
@@ -851,6 +852,18 @@ class JobNotifier extends StateNotifier<AppJobState> {
     );
     final totalBoards = runs.length;
 
+    // Phase 10.3: board-scoped resume — read the previous session's
+    // board_resume block (continue settings gate), pre-compute completed
+    // indices per boardId for skip/re-offer bookkeeping.
+    final continueMode = state.isContinueMode;
+    Map<String, BoardTypeResume>? resumeByBoard;
+    if (continueMode) {
+      resumeByBoard = await _loadBoardResume(
+        username: username,
+        mediaType: mediaType,
+      );
+    }
+
     try {
       for (var i = 0; i < runs.length; i++) {
         if (_downloadCancelToken?.isCancelled ?? false) break;
@@ -862,6 +875,18 @@ class JobNotifier extends StateNotifier<AppJobState> {
         // ---- Fetch pins for this board (whole vs picked sections) ----
         List<PinItem> pins;
         if (choice.mode == BoardDownloadMode.sections) {
+          // 10.3 continue: boards fully completed per type are skipped up
+          // front (re-offered only when failed items exist — D-04 truth
+          // table applies unchanged at the index level below).
+          final resume = resumeByBoard?[choice.boardId];
+          if (resume != null &&
+              choice.boardPinCount > 0 &&
+              resume.completedIndices.length >= choice.boardPinCount &&
+              resume.failedDownloaded == 0) {
+            _logService.queue(
+                'Board ${choice.name}: already complete for this type — skipping');
+            continue;
+          }
           var sectionPins = <PinItem>[];
           for (final sectionId in choice.sectionIds) {
             if (_downloadCancelToken?.isCancelled ?? false) break;
@@ -897,13 +922,13 @@ class JobNotifier extends StateNotifier<AppJobState> {
         }
 
         // ---- Download this board as a feed-shaped run ----
-        await _download.runFeedDownload(
+        final runResult = await _download.runFeedDownload(
           pins: pins,
           author: state.author,
           mediaType: mediaType,
           outputPath: outputPath,
           overwrite: overwrite,
-          saveMetadata: false, // board metadata handled below (10.3 resume)
+          saveMetadata: false,
           isContinueMode: false,
           lastIndexDownloaded: -1,
           previousMediaType: null,
@@ -925,6 +950,20 @@ class JobNotifier extends StateNotifier<AppJobState> {
             );
           },
         );
+
+        // ---- 10.3: persist per-board+type resume block ----
+        if (saveMetadata && runResult.sessionCompleted.isNotEmpty) {
+          await _upsertBoardResume(
+            username: username,
+            boardId: choice.boardId,
+            boardSlug: choice.slug,
+            mediaType: mediaType,
+            completedIndices: runResult.sessionCompleted,
+            successDownloaded: runResult.stats.downloaded,
+            skipDownloaded: runResult.stats.skipped,
+            failedDownloaded: runResult.stats.failed,
+          );
+        }
       }
 
       final wasInterrupted = _downloadCancelToken?.isCancelled ?? false;
@@ -941,6 +980,123 @@ class JobNotifier extends StateNotifier<AppJobState> {
     } catch (e) {
       _logService.error('Board download failed: ${userMessage(e)}');
       state = state.copyWith(status: JobStatus.failed, error: userMessage(e));
+    }
+  }
+
+  /// 10.3: read the previous session's board_resume block from the user
+  /// metadata for the given media type (tolerant: missing file/corrupt
+  /// block → null → fresh runs; D-25: only THIS type's sets are returned).
+  Future<Map<String, BoardTypeResume>?> _loadBoardResume({
+    required String username,
+    required MediaType mediaType,
+  }) async {
+    try {
+      final baseFolder = 'PinDL/@$username';
+      final files = await _downloadService.listFilesInFolder(baseFolder,
+          extension: 'json');
+      if (files.isEmpty) return null;
+      final content = await _downloadService.readTextFromDownloads(
+          files.first, baseFolder);
+      if (content == null || content.isEmpty) return null;
+      final result = MetadataReader.parseAndRead(content);
+      if (!result.isOk || result.boardResume == null) return null;
+      final map = <String, BoardTypeResume>{};
+      for (final entry in result.boardResume!.entries) {
+        final type = entry.typeFor(mediaType.name);
+        if (type != null) map[entry.boardId] = type;
+      }
+      return map;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 10.3: merge this board's completion set into the user metadata's
+  /// board_resume block (v2-additive; media-type keyed per D-25).
+  Future<void> _upsertBoardResume({
+    required String username,
+    required String boardId,
+    required String boardSlug,
+    required MediaType mediaType,
+    required Set<int> completedIndices,
+    required int successDownloaded,
+    required int skipDownloaded,
+    required int failedDownloaded,
+  }) async {
+    try {
+      final baseFolder = 'PinDL/@$username';
+      final files = await _downloadService.listFilesInFolder(baseFolder,
+          extension: 'json');
+      Map<String, dynamic> existing = {};
+      Author? author;
+      BoardResume? boardResume;
+      if (files.isNotEmpty) {
+        final content = await _downloadService.readTextFromDownloads(
+            files.first, baseFolder);
+        if (content != null && content.isNotEmpty) {
+          final decoded = MetadataReader.parseAndRead(content);
+          if (decoded.isOk) {
+            author = decoded.author;
+            boardResume = decoded.boardResume;
+            existing = decoded.jsonMap ?? {};
+          }
+        }
+      }
+
+      final typeKey = mediaType.name;
+      final prevEntry = boardResume?.entryFor(boardId);
+      final prevType = prevEntry?.typeFor(typeKey);
+      final mergedIndices = {
+        ...(prevType?.completedIndices ?? const <int>{}),
+        ...completedIndices,
+      };
+      final newEntry = BoardResumeEntry(
+        boardId: boardId,
+        boardSlug: boardSlug,
+        types: {
+          ...(prevEntry?.types ?? const {}),
+          typeKey: BoardTypeResume(
+            completedIndices: mergedIndices,
+            successDownloaded:
+                (prevType?.successDownloaded ?? 0) + successDownloaded,
+            skipDownloaded: (prevType?.skipDownloaded ?? 0) + skipDownloaded,
+            failedDownloaded:
+                (prevType?.failedDownloaded ?? 0) + failedDownloaded,
+          ),
+        },
+      );
+      final otherEntries = (boardResume?.entries ?? const <BoardResumeEntry>[])
+          .where((e) => e.boardId != boardId)
+          .toList();
+      final newBlock =
+          BoardResume(entries: [...otherEntries, newEntry]);
+
+      final json = existing.isNotEmpty
+          ? (existing..['board_resume'] = newBlock.toJson())
+          : MetadataReader.buildV2Metadata(
+              author: author ??
+                  Author(
+                      username: username, name: username, userId: 'unknown'),
+              pins: const [],
+              completedIndices: const {},
+              totalImages: 0,
+              totalVideos: 0,
+              successDownloaded: 0,
+              skipDownloaded: 0,
+              failedDownloaded: 0,
+              wasInterrupted: false,
+              mediaType: mediaType.name,
+              status: 'downloaded',
+              boardResume: newBlock,
+            );
+      final filename = files.isNotEmpty
+          ? files.first
+          : '${json['author']?['userId'] ?? username}.json';
+      await _saveMetadata(baseFolder, filename, json);
+      _logService.saved('Board resume data saved for @$username');
+    } catch (e) {
+      // Best-effort: resume persistence failure never fails the job.
+      _logService.error('Board resume save failed: ${userMessage(e)}');
     }
   }
 

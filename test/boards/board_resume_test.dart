@@ -200,6 +200,60 @@ void main() {
     });
   });
 
+  group('10.3 continue-mode pre-check semantics (provider contract)', () {
+    test('completed board (no failures) → skip; failed items exist → re-run', () {
+      bool shouldSkip(BoardTypeResume resume, int boardPinCount) =>
+          resume.completedIndices.length >= boardPinCount &&
+          resume.failedDownloaded == 0;
+
+      // Fully downloaded, nothing failed → skip (D-04: skips are complete).
+      expect(
+        shouldSkip(
+            BoardTypeResume(
+                completedIndices: {0, 1, 2}, failedDownloaded: 0),
+            3),
+        isTrue,
+      );
+      // Failures present → re-run (failed re-offered; D-04).
+      expect(
+        shouldSkip(
+            BoardTypeResume(
+                completedIndices: {0, 1, 2}, failedDownloaded: 1),
+            3),
+        isFalse,
+      );
+      // Partial (hole) → re-run.
+      expect(
+        shouldSkip(
+            BoardTypeResume(completedIndices: {0}, failedDownloaded: 0), 3),
+        isFalse,
+      );
+    });
+
+    test('media-type keyed lookup returns only the requested type (D-25)', () {
+      final entry = BoardResumeEntry(boardId: 'b1', types: {
+        'image': BoardTypeResume(completedIndices: {0, 1}),
+        'video': BoardTypeResume(completedIndices: {0}),
+      });
+      // The provider reads entry.typeFor(mediaType.name) — cross-type
+      // state cannot leak into the other type's continue decision.
+      expect(entry.typeFor('image')!.completedIndices, {0, 1});
+      expect(entry.typeFor('video')!.completedIndices, {0});
+      expect(entry.typeFor('missing'), isNull);
+    });
+
+    test('merge-on-upsert: new completion set unions the previous type set',
+        () {
+      final prev = BoardTypeResume(completedIndices: {0, 1});
+      final merged = {
+        ...prev.completedIndices,
+        ...{1, 2, 5},
+      };
+      expect(merged, {0, 1, 2, 5});
+      expect(maxContiguous(merged) + 1, 3);
+    });
+  });
+
   group('pipeline integration surface (09.5 contract)', () {
     test('board pin session maps to the v2 writer unchanged', () {
       // Evidence: pins extracted from a board feed are ordinary PinItems;
