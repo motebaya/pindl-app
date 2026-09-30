@@ -28,6 +28,7 @@ import 'dart:convert';
 
 import '../../data/models/author.dart';
 import '../../data/models/pin_item.dart';
+import 'board_resume.dart';
 
 /// Request-scoped bookmark provenance (Phase 07 gate 07.4, D-34; design:
 /// planning/extraction/08-bookmark-context-design.md).
@@ -179,6 +180,10 @@ class MetadataReadResult {
   final String? nextBookmark;
   final BookmarkContext? bookmarkContext;
 
+  /// Phase 09.5: board-scoped resume block, v2-additive. Present (non-null)
+  /// only when the file carries one; user-feed files read as null.
+  final BoardResume? boardResume;
+
   const MetadataReadResult._({
     required this.schemaVersion,
     required this.outcome,
@@ -198,6 +203,7 @@ class MetadataReadResult {
     this.jsonMap,
     this.nextBookmark,
     this.bookmarkContext,
+    this.boardResume,
   });
 
   const MetadataReadResult.corrupt()
@@ -302,6 +308,13 @@ class MetadataReader {
       }
     }
 
+    // Phase 09.5: board resume block (v2-additive). Malformed → skipped
+    // entries / empty block (D-26 spirit); absent → null (user-feed files).
+    BoardResume? boardResume;
+    if (version >= 2 && json['board_resume'] != null) {
+      boardResume = BoardResume.tryParse(json['board_resume']);
+    }
+
     final lastIndex = json['last_index_downloaded'] as int? ?? -1;
 
     // v2 keeps lastIndexDownloaded as the v1-compatible derived field;
@@ -328,6 +341,7 @@ class MetadataReader {
       jsonMap: json,
       nextBookmark: nextBookmark,
       bookmarkContext: bookmarkContext,
+      boardResume: boardResume,
     );
   }
 
@@ -351,6 +365,7 @@ class MetadataReader {
     String? status,
     String? nextBookmark,
     BookmarkContext? bookmarkContext,
+    BoardResume? boardResume,
   }) {
     return {
       'schema': currentSchemaVersion,
@@ -372,6 +387,9 @@ class MetadataReader {
         'next_bookmark': nextBookmark,
         'bookmark_context': bookmarkContext.toJson(),
       },
+      // Phase 09.5: board resume block, v2-additive — absent for user-feed
+      // files (backward compatible: readers without board support ignore it).
+      if (boardResume != null) 'board_resume': boardResume.toJson(),
       'saved_at': DateTime.now().toIso8601String(),
     };
   }
