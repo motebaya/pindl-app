@@ -36,6 +36,14 @@ class MainActivity : FlutterActivity() {
         // FFmpegKit only for the "ffmpeg" flavor where native libs are present.
         registerPluginsManually(flutterEngine)
 
+        // Phase 11.1: debug-only boot assert (AND-1 silent-kill detector) —
+        // resolve every expected plugin class without initializing it and log
+        // a LOUD error naming any class an upgrade renamed/moved. No-op in
+        // release builds.
+        if (BuildConfig.DEBUG) {
+            BootPluginAssert.assertRegisteredPlugins(BuildConfig.FLAVOR)
+        }
+
         // Register the media MethodChannel via extracted handler (reusable in background engine)
         MediaChannelHandler(this).register(flutterEngine)
     }
