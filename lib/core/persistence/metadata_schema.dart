@@ -39,6 +39,12 @@ import '../../data/models/pin_item.dart';
 class BookmarkContext {
   static const resourceUserPins = 'user_pins';
 
+  /// Phase 09 board resources — same tuple contract, board scope travels
+  /// inside `request_options` (`board_id` / `section_id` keys, registry
+  /// builders are the single source of these option sets).
+  static const resourceBoardPins = 'board_pins';
+  static const resourceBoardSectionPins = 'board_section_pins';
+
   final String username;
   final String resource;
   final Map<String, dynamic> requestOptions;

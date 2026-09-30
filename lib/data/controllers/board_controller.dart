@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart' show CancelToken;
 
+import '../../core/persistence/metadata_schema.dart';
 import '../models/board.dart';
 import '../models/board_section.dart';
 import '../models/pin_item.dart';
@@ -30,7 +31,16 @@ class BoardPinsResult {
   /// Cap-exit continuation cursor; null on a natural end.
   final String? nextBookmark;
 
-  const BoardPinsResult({required this.pins, this.nextBookmark});
+  /// Full provenance tuple for the cursor (09.4 / D-34) — non-null exactly
+  /// when [nextBookmark] is non-null. Persistence consumes the tuple; the
+  /// raw cursor never travels alone.
+  final BookmarkContext? bookmarkContext;
+
+  const BoardPinsResult({
+    required this.pins,
+    this.nextBookmark,
+    this.bookmarkContext,
+  });
 }
 
 /// Phase 09.3 — board fetch: boards / board sections / section pins /
@@ -177,6 +187,11 @@ class BoardController {
   /// Fetch the pins of one board section. Rows parse through the UNCHANGED
   /// pipeline ([PinItem.fromUserPinJson] — grid_item shape family); dedupe
   /// by pin id, first occurrence wins (Phase 07 G5 semantics).
+  ///
+  /// On a cap exit the raw cursor is returned WITH its full D-34 provenance
+  /// tuple ([BoardPinsResult.bookmarkContext], resource
+  /// `board_section_pins`) — the 09.4 contract. Reuse is ONLY on a full
+  /// tuple match; mismatch → fresh extraction (fail-safe direction).
   Future<BoardPinsResult> fetchSectionPins({
     required String sectionId,
     required String username,
@@ -194,10 +209,12 @@ class BoardController {
         bookmark: bookmark,
         cancelToken: cancelToken,
         label: 'section pins',
+        resource: BookmarkContext.resourceBoardSectionPins,
       );
 
   /// Fetch a whole board's pins (board feed). Same contract as
-  /// [fetchSectionPins] with the `board.pins` registry entry.
+  /// [fetchSectionPins] with the `board.pins` registry entry and resource
+  /// tag `board_pins`.
   Future<BoardPinsResult> fetchBoardPins({
     required String boardId,
     required String username,
@@ -215,6 +232,7 @@ class BoardController {
         bookmark: bookmark,
         cancelToken: cancelToken,
         label: 'board pins',
+        resource: BookmarkContext.resourceBoardPins,
       );
 
   /// Shared pin-feed loop (section pins / board feed): capped pagination,
@@ -230,6 +248,7 @@ class BoardController {
     required String? bookmark,
     required CancelToken? cancelToken,
     required String label,
+    required String resource,
   }) async {
     final sourceUrl =
         resolveSourceUrl(def, username: username, boardSlug: boardSlug);
@@ -274,6 +293,19 @@ class BoardController {
     }
     return BoardPinsResult(
       pins: pins,
+      // 09.4 (D-34): the cursor travels with its full provenance tuple or
+      // not at all. Board/section scope rides inside request_options
+      // (board_id / section_id) — canonical-JSON comparison covers it.
+      bookmarkContext: capped
+          ? BookmarkContext(
+              username: username,
+              resource: resource,
+              requestOptions: options,
+              extractionMode: 'pins',
+              maxPages: maxPages,
+              bookmark: pendingBookmark,
+            )
+          : null,
       nextBookmark: capped ? pendingBookmark : null,
     );
   }
