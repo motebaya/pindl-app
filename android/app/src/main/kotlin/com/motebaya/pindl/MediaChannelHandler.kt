@@ -384,6 +384,15 @@ class MediaChannelHandler(private val context: Context) {
 
         if (targetDir.exists()) cleanupDuplicateFiles(targetDir, filename)
 
+        // Phase 11.3 (Branch C maintenance fix, minSdk decision record):
+        // the legacy (<Q) direct-write path previously skipped duplicate
+        // cleanup AND delete-before-write, so legacy devices could accumulate
+        // "name(1).ext" strays that MediaStore cleanup never sees. Bring it
+        // to parity with the Q+ path.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            if (targetFile.exists()) targetFile.delete()
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val existingUri = findMediaStoreEntry(filename, subFolder)
             if (existingUri != null) {

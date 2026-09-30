@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -268,7 +269,9 @@ class DownloadService {
       }
       return true; // Other platforms don't need this permission
     } catch (e) {
-      print('hasManageStoragePermission error: $e');
+      // Phase 11.6: channel errors must not masquerade as "not granted"
+      // silently (AND-1 diagnostics class).
+      debugPrint('hasManageStoragePermission channel error: $e');
       return false;
     }
   }
@@ -284,7 +287,8 @@ class DownloadService {
       }
       return true;
     } catch (e) {
-      print('requestManageStoragePermission error: $e');
+      // Phase 11.6: same diagnostics rule as hasManageStoragePermission.
+      debugPrint('requestManageStoragePermission channel error: $e');
       return false;
     }
   }
