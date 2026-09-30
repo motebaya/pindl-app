@@ -18,6 +18,7 @@ import '../../data/services/download_service.dart';
 import '../../data/services/hls_converter.dart';
 import '../../data/services/hls_service.dart';
 import '../../data/services/log_service.dart';
+import '../../data/controllers/extraction_controller.dart';
 import '../../data/services/pinterest_extractor_service.dart';
 import '../../data/services/task_state_persistence.dart';
 import '../../data/models/background_task_state.dart';
@@ -224,6 +225,7 @@ class AppJobState {
 class JobNotifier extends StateNotifier<AppJobState> {
   final LogService _logService;
   final PinterestExtractorService _extractor;
+  final ExtractionController _extraction;
   final DownloadService _downloadService;
   final HlsService? _hlsService;
   final HlsConverter? _hlsConverter;
@@ -271,6 +273,17 @@ class JobNotifier extends StateNotifier<AppJobState> {
     })? onDownloadComplete,
   })  : _logService = logService,
         _extractor = extractor,
+        _extraction = ExtractionController(
+          extractor: extractor,
+          log: ControllerLog(
+            init: logService.init,
+            fetch: logService.fetch,
+            parse: logService.parse,
+            config: logService.config,
+            queue: logService.queue,
+            complete: logService.complete,
+          ),
+        ),
         _downloadService = downloadService,
         // Only instantiate HLS services when FFmpeg is enabled (compile-time const).
         // Tree-shaking eliminates HlsService/HlsConverter from lite AOT binaries.
@@ -283,6 +296,14 @@ class JobNotifier extends StateNotifier<AppJobState> {
   /// Start info extraction (Submit button) - Phase B
   /// This only fetches metadata, does NOT start downloading
   /// If saveMetadata is true, saves metadata immediately after parsing
+  /// Start info extraction (Submit button) - Phase B
+  /// This only fetches metadata, does NOT start downloading.
+  /// If saveMetadata is true, saves metadata immediately after parsing.
+  ///
+  /// Phase 08 (08.1): pipeline extracted to the widget-free/channel-free
+  /// ExtractionController (lib/data/controllers/); this method is the
+  /// state-machine adapter: pre-flight, hook wiring, state transitions,
+  /// metadata-write execution (channel stays here), outcome application.
   Future<void> startExtraction({
     required String input,
     required MediaType mediaType,
@@ -292,13 +313,13 @@ class JobNotifier extends StateNotifier<AppJobState> {
   }) async {
     // Update the extractor's verbose flag with the latest setting
     _extractor.verbose = verbose;
-    
+
     // Validate we can start extraction
     if (state.isExtracting || state.isDownloading) {
       _logService.error('Cannot start extraction: another operation in progress');
       return;
     }
-    
+
     final inputType = PinUrlValidator.detectInputType(input);
     if (inputType == null) {
       _logService.error('Invalid input: $input');
@@ -309,104 +330,104 @@ class JobNotifier extends StateNotifier<AppJobState> {
       return;
     }
 
-    _extractCancelToken = CancelToken();
-
-    // ── Short URL resolution: resolve pin.it URLs BEFORE routing ──
-    // Short URLs can redirect to either a pin page or a user profile page.
-    // We must resolve first to determine the correct extraction path.
-    String resolvedInput = input;
-    bool isUsername = inputType == 'username';
-
-    if (PinUrlValidator.isShortUrl(input)) {
-      // Transition to fetchingInfo early so UI shows loading state
+    _extraction.onReadyToExtract = ({
+      required resolvedInput,
+      required isUsername,
+      required viaShortUrl,
+      required mediaType,
+      required maxPages,
+    }) {
+      _extractCancelToken = _extraction.cancelToken;
+      if (!viaShortUrl) {
+        state = AppJobState(
+          status: JobStatus.fetchingInfo,
+          input: resolvedInput,
+          isUsername: isUsername,
+        );
+      }
+      _persistExtractionState(resolvedInput, isUsername, mediaType, maxPages);
+      onTaskStarted?.call();
+    };
+    _extraction.onResolving = (input) {
       state = AppJobState(
         status: JobStatus.fetchingInfo,
         input: input,
         isUsername: false,
       );
-      _logService.init('Resolving short URL: $input');
-
-      try {
-        final rawRedirectUrl = await _extractor.resolveShortUrl(
-          input, _extractCancelToken,
-        );
-        _logService.fetch('Redirected to: $rawRedirectUrl');
-
-        // Clean the redirected URL (strip /sent/, query params, etc.)
-        final cleaned = PinUrlValidator.cleanRedirectedUrl(rawRedirectUrl);
-        if (cleaned == null) {
-          state = state.copyWith(
-            status: JobStatus.failed,
-            error: 'Could not parse redirected URL: $rawRedirectUrl',
-          );
-          return;
-        }
-
-        resolvedInput = cleaned.value;
-        isUsername = cleaned.type == 'username';
-        _logService.parse('Resolved to ${cleaned.type}: $resolvedInput');
-
-        // Update input field callback so UI shows the resolved value
-        onInputResolved?.call(resolvedInput: resolvedInput, isUsername: isUsername);
-
-        // If resolved to a username, STOP here — don't auto-extract.
-        // User needs to adjust settings (max pages, media type) before submitting.
-        if (isUsername) {
-          _logService.complete('Short URL resolved to username: @$resolvedInput — submit manually to extract.');
-          state = const AppJobState(status: JobStatus.idle);
-          return;
-        }
-      } on CancelledException {
-        _logService.interrupted('Short URL resolution cancelled');
-        state = state.copyWith(status: JobStatus.cancelled);
-        return;
-      } catch (e) {
-        _logService.error('Failed to resolve short URL: $e');
-        state = state.copyWith(
-          status: JobStatus.failed,
-          error: userMessage(e),
-        );
-        return;
-      }
-    }
-
-    // Transition to Phase B: fetchingInfo (if not already set by short URL resolution)
-    state = AppJobState(
-      status: JobStatus.fetchingInfo,
-      input: resolvedInput,
-      isUsername: isUsername,
-    );
-
-    // Persist initial extraction state
-    _persistExtractionState(resolvedInput, isUsername, mediaType, maxPages);
-
-    // Notify foreground service manager that task started
-    onTaskStarted?.call();
-
-    _logService.init('Loading info for: $resolvedInput');
+    };
+    _extraction.onResolved = ({required resolvedInput, required isUsername}) {
+      onInputResolved?.call(
+          resolvedInput: resolvedInput, isUsername: isUsername);
+    };
+    _extraction.onProgress = ({required username, required itemCount, required currentPage, required maxPage}) {
+      _persistence?.updateProgress(currentPage: currentPage, totalItems: itemCount);
+      onExtractionProgress?.call(
+        username: username,
+        itemCount: itemCount,
+        currentPage: currentPage,
+        maxPage: maxPage,
+      );
+    };
 
     try {
-      if (isUsername) {
-        await _extractUserPins(resolvedInput, mediaType, saveMetadata: saveMetadata, maxPages: maxPages);
-      } else {
-        await _extractSinglePin(resolvedInput, mediaType);
+      final outcome = await _extraction.extract(
+        input: input,
+        mediaType: mediaType,
+        saveMetadata: saveMetadata,
+        maxPages: maxPages,
+      );
+
+      if (outcome.stoppedAfterResolve) {
+        // Short URL resolved to a username — stop; manual submit next
+        // (state already idle via the early hook).
+        state = const AppJobState(status: JobStatus.idle);
+        return;
       }
-      // Extraction completed successfully — notify foreground service
-      // so it can show completion notification (identical to download completion)
-      if (state.status == JobStatus.readyToDownload) {
-        onTaskCompleted?.call(taskType: 'extraction');
+
+      if (outcome.author != null) {
+        // Parse-time metadata write (channel stays provider-side).
+        final write = outcome.metadataWrite;
+        if (write != null) {
+          await _saveMetadata(write.subFolder, write.filename, write.json);
+          _logService.saved('Metadata saved for @${outcome.author!.username}');
+        }
+
+        state = state.copyWith(
+          status: JobStatus.readyToDownload,
+          author: outcome.author,
+          pins: outcome.pins,
+          singlePinResult: outcome.singlePinResult,
+          totalImages: outcome.totalImages,
+          totalVideos: outcome.totalVideos,
+          nextBookmark: outcome.nextBookmark,
+          bookmarkContext: outcome.bookmarkContext,
+        );
+
+        // Extraction completed successfully — notify foreground service
+        // so it can show completion notification (identical to download completion)
+        if (state.status == JobStatus.readyToDownload) {
+          onTaskCompleted?.call(taskType: 'extraction');
+        }
+        if (outcome.singlePinResult != null) {
+          _logService.complete('Info loaded for pin ${outcome.pins.first.pinId}. Ready to download.');
+        } else {
+          _logService.complete('Info loaded for @${outcome.author!.username}. Ready to download.');
+        }
       }
     } on CancelledException {
-      _logService.interrupted('Info loading cancelled');
-      state = state.copyWith(
-        status: JobStatus.cancelled,
-      );
+      if (_extraction.lastPhase == ExtractionPhase.resolve) {
+        _logService.interrupted('Short URL resolution cancelled');
+      } else {
+        _logService.interrupted('Info loading cancelled');
+      }
+      state = state.copyWith(status: JobStatus.cancelled);
     } catch (e) {
-      _logService.error('Failed to load info: $e');
-      state = state.copyWith(
-        status: JobStatus.failed,
-        error: userMessage(e),
-      );
+      if (_extraction.lastPhase == ExtractionPhase.resolve) {
+        _logService.error('Failed to resolve short URL: $e');
+      } else {
+        _logService.error('Failed to load info: $e');
+      }
+      state = state.copyWith(status: JobStatus.failed, error: userMessage(e));
     }
   }
 
@@ -466,99 +487,6 @@ class JobNotifier extends StateNotifier<AppJobState> {
   /// Mark persisted task as completed
   void _completePersistedTask() {
     _persistence?.markCompleted();
-  }
-
-  Future<void> _extractUserPins(String username, MediaType mediaType, {bool saveMetadata = false, int maxPages = 50}) async {
-    final normalizedUsername = PinUrlValidator.normalizeUsername(username);
-    
-    _logService.config('Getting config for @$normalizedUsername');
-    
-    final config = await _extractor.getConfigInfo(
-      username: normalizedUsername,
-      cancelToken: _extractCancelToken,
-    );
-    
-    _logService.config('App version: ${config.appVersion}');
-    _logService.config('User ID: ${config.userId}');
-    
-    _logService.fetch('Fetching pins for @$normalizedUsername (max $maxPages pages)');
-    
-    final result = await _extractor.getUserPins(
-      username: normalizedUsername,
-      maxPages: maxPages,
-      cancelToken: _extractCancelToken,
-      onProgress: (count, currentPage, maxPage) {
-        _logService.fetch('Fetched $count pins (page $currentPage/$maxPage)...');
-        // Persist extraction page progress to Hive
-        _persistence?.updateProgress(
-          currentPage: currentPage,
-          totalItems: count,
-        );
-        // Notify foreground service for notification update
-        onExtractionProgress?.call(
-          username: normalizedUsername,
-          itemCount: count,
-          currentPage: currentPage,
-          maxPage: maxPage,
-        );
-      },
-    );
-    
-    _logService.parse('Parsed ${result.pins.length} pins');
-    _logService.parse('Images: ${result.totalImages}, Videos: ${result.totalVideos}');
-    
-    // Phase 07 (07.5, D-34): capture the capped-extraction cursor WITH its
-    // request context, or clear any stale one (fresh extraction = new world).
-    BookmarkContext? newContext;
-    if (result.bookmark != null) {
-      newContext = BookmarkContext(
-        username: normalizedUsername,
-        resource: BookmarkContext.resourceUserPins,
-        requestOptions: _extractor.canonicalRequestOptions(normalizedUsername),
-        extractionMode: mediaType.name,
-        maxPages: maxPages,
-        bookmark: result.bookmark!,
-      );
-      // Cap note (contract 07.5): honest wording — the count of remaining
-      // items is unknowable without fetching.
-      _logService.queue(
-          'Page cap reached — more items may be available (use Fetch More)');
-    }
-    
-    // Transition to Phase C: readyToDownload
-    state = state.copyWith(
-      status: JobStatus.readyToDownload,
-      author: result.author,
-      pins: result.pins,
-      totalImages: result.totalImages,
-      totalVideos: result.totalVideos,
-      nextBookmark: result.bookmark,
-      bookmarkContext: newContext,
-    );
-    
-    // REVISION 1: Save metadata immediately after parsing (before download)
-    if (saveMetadata && result.author != null) {
-      final baseFolder = 'PinDL/@$normalizedUsername';
-      final metadataJson = MetadataReader.buildV2Metadata(
-        author: result.author,
-        pins: result.pins,
-        completedIndices: const {}, // nothing downloaded yet at parse time
-        totalImages: result.totalImages,
-        totalVideos: result.totalVideos,
-        successDownloaded: 0,
-        skipDownloaded: 0,
-        failedDownloaded: 0,
-        wasInterrupted: false,
-        mediaType: mediaType.name,
-        status: 'parsed', // Mark as parsed but not downloaded yet
-        nextBookmark: state.nextBookmark,
-        bookmarkContext: state.bookmarkContext,
-      );
-      await _saveMetadata(baseFolder, '${result.author.userId}.json', metadataJson);
-      _logService.saved('Metadata saved for @${result.author.username}');
-    }
-    
-    _logService.complete('Info loaded for @${result.author.username}. Ready to download.');
   }
 
   /// Phase 07 (07.5, D-34): "Fetch more" — one-hop continuation of a capped
@@ -683,54 +611,10 @@ class JobNotifier extends StateNotifier<AppJobState> {
     }
   }
 
-  Future<void> _extractSinglePin(String pinInput, MediaType mediaType) async {
-    final pinInfo = PinUrlValidator.parse(pinInput);
-    if (pinInfo == null) {
-      throw ValidationException('Invalid pin URL or ID');
-    }
-    
-    _logService.fetch('Fetching pin: ${pinInfo.id}');
-    
-    // Use getPinMedia to get both image and video data
-    final result = await _extractor.getPinMedia(
-      pinIdOrUrl: pinInput,
-      cancelToken: _extractCancelToken,
-    );
-    
-    _logService.parse('Found media for pin: ${result.title}');
-    if (result.hasImage) {
-      _logService.parse('Image available: ${result.imageUrl}');
-    }
-    if (result.hasVideoContent) {
-      _logService.parse('Video available: ${result.videoUrl}');
-    }
-    
-    // Convert single result to pin list for unified handling
-    final pin = PinItem(
-      pinId: result.pinId,
-      title: result.title,
-      imageUrl: result.imageUrl,
-      hasImage: result.hasImage,
-      hasVideo: result.hasVideoContent,
-    );
-    
-    // Transition to Phase C: readyToDownload
-    state = state.copyWith(
-      status: JobStatus.readyToDownload,
-      author: result.author,
-      pins: [pin],
-      singlePinResult: result,
-      totalImages: result.hasImage ? 1 : 0,
-      totalVideos: result.hasVideoContent ? 1 : 0,
-    );
-    
-    _logService.complete('Info loaded for pin ${result.pinId}. Ready to download.');
-  }
-
   /// Cancel info extraction (Phase B only)
   void cancelExtraction() {
     if (!state.isExtracting) return;
-    _extractCancelToken?.cancel('User cancelled');
+    _extraction.cancel();
     _logService.interrupted('Info loading cancelled by user');
   }
 
