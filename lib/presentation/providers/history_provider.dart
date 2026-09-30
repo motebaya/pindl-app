@@ -1,7 +1,6 @@
-import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../data/models/history_item.dart';
+import '../../data/services/history_hive_store.dart';
 
 /// State for history management
 class HistoryState {
@@ -61,34 +60,23 @@ class DownloadHistoryState {
   }
 }
 
-/// History notifier for extraction history
+/// History notifier for extraction history.
+///
+/// Phase 12.5 (PERF-2): storage behind this notifier moved from SP
+/// whole-list JSON to a Hive store (O(1) appends). All public semantics
+/// unchanged: addPending → updateLast(success/failed) lifecycle, 1000-item
+/// FIFO cap, toggleSort, clearAll.
 class HistoryNotifier extends StateNotifier<HistoryState> {
-  static const _historyKey = 'extraction_history';
   static const _maxItems = 1000;
-  final SharedPreferences? _prefs;
+  final HistoryHiveStore<HistoryItem>? _store;
 
-  HistoryNotifier(this._prefs) : super(const HistoryState()) {
+  HistoryNotifier(this._store) : super(const HistoryState()) {
     _loadHistory();
   }
 
   void _loadHistory() {
-    if (_prefs == null) return;
-    final jsonStr = _prefs!.getString(_historyKey);
-    if (jsonStr == null) return;
-
-    try {
-      final jsonList = jsonDecode(jsonStr) as List<dynamic>;
-      final items = jsonList
-          .map((e) => HistoryItem.fromJson(e as Map<String, dynamic>))
-          .toList();
-      state = state.copyWith(items: items);
-    } catch (_) {}
-  }
-
-  Future<void> _saveHistory() async {
-    if (_prefs == null) return;
-    final jsonList = state.items.map((e) => e.toJson()).toList();
-    await _prefs!.setString(_historyKey, jsonEncode(jsonList));
+    if (_store == null) return;
+    state = state.copyWith(items: _store.loadAll());
   }
 
   /// Add a pending history item when submit is pressed
@@ -100,20 +88,20 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
       createdAt: DateTime.now(),
     );
     var newItems = [...state.items, item];
-    
+
     // Enforce max 1000 items limit (remove oldest first - FIFO)
     while (newItems.length > _maxItems) {
       newItems.removeAt(0);
     }
-    
+
     state = state.copyWith(items: newItems);
-    _saveHistory();
+    _store?.add(item); // O(1) — no whole-list rewrite (PERF-2)
   }
 
   /// Update the last pending item to success/failed
   void updateLast(HistoryStatus status, {String? errorMessage}) {
     if (state.items.isEmpty) return;
-    
+
     // Find the last pending item
     final index = state.items.lastIndexWhere((i) => i.status == HistoryStatus.pending);
     if (index == -1) return;
@@ -124,7 +112,11 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
       errorMessage: errorMessage,
     );
     state = state.copyWith(items: items);
-    _saveHistory();
+    if (_store != null) {
+      // Mirror the state-list index into the store (both FIFO-capped,
+      // append-ordered, so indices align).
+      _store.updateAt(index, items[index]);
+    }
   }
 
   /// Toggle sort order
@@ -135,38 +127,23 @@ class HistoryNotifier extends StateNotifier<HistoryState> {
   /// Clear all history
   void clearAll() {
     state = state.copyWith(items: []);
-    _saveHistory();
+    _store?.clearAll();
   }
 }
 
-/// Download history notifier
+/// Download history notifier (Hive-backed — see HistoryNotifier notes).
 class DownloadHistoryNotifier extends StateNotifier<DownloadHistoryState> {
-  static const _historyKey = 'download_history';
   static const _maxItems = 1000;
-  final SharedPreferences? _prefs;
+  final HistoryHiveStore<DownloadHistoryItem>? _store;
 
-  DownloadHistoryNotifier(this._prefs) : super(const DownloadHistoryState()) {
+  DownloadHistoryNotifier(this._store)
+      : super(const DownloadHistoryState()) {
     _loadHistory();
   }
 
   void _loadHistory() {
-    if (_prefs == null) return;
-    final jsonStr = _prefs!.getString(_historyKey);
-    if (jsonStr == null) return;
-
-    try {
-      final jsonList = jsonDecode(jsonStr) as List<dynamic>;
-      final items = jsonList
-          .map((e) => DownloadHistoryItem.fromJson(e as Map<String, dynamic>))
-          .toList();
-      state = state.copyWith(items: items);
-    } catch (_) {}
-  }
-
-  Future<void> _saveHistory() async {
-    if (_prefs == null) return;
-    final jsonList = state.items.map((e) => e.toJson()).toList();
-    await _prefs!.setString(_historyKey, jsonEncode(jsonList));
+    if (_store == null) return;
+    state = state.copyWith(items: _store.loadAll());
   }
 
   /// Add a download history item
@@ -185,14 +162,14 @@ class DownloadHistoryNotifier extends StateNotifier<DownloadHistoryState> {
       errorMessage: errorMessage,
     );
     var newItems = [...state.items, item];
-    
+
     // Enforce max 1000 items limit (remove oldest first - FIFO)
     while (newItems.length > _maxItems) {
       newItems.removeAt(0);
     }
-    
+
     state = state.copyWith(items: newItems);
-    _saveHistory();
+    _store?.add(item); // O(1) — no whole-list rewrite (PERF-2)
   }
 
   /// Toggle sort order
@@ -203,20 +180,20 @@ class DownloadHistoryNotifier extends StateNotifier<DownloadHistoryState> {
   /// Clear all history
   void clearAll() {
     state = state.copyWith(items: []);
-    _saveHistory();
+    _store?.clearAll();
   }
 }
 
 /// Provider for extraction history
 final historyProvider =
     StateNotifierProvider<HistoryNotifier, HistoryState>((ref) {
-  // This will be overridden in main.dart with actual SharedPreferences
+  // Overridden in main.dart with the Hive-backed store.
   return HistoryNotifier(null);
 });
 
 /// Provider for download history
 final downloadHistoryProvider =
     StateNotifierProvider<DownloadHistoryNotifier, DownloadHistoryState>((ref) {
-  // This will be overridden in main.dart with actual SharedPreferences
+  // Overridden in main.dart with the Hive-backed store.
   return DownloadHistoryNotifier(null);
 });
