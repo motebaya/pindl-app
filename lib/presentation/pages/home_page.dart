@@ -666,7 +666,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
                 fontSize: 12,
                 color: textColor, // Same color as surrounding text
                 decoration: TextDecoration.underline,
-                decorationColor: textColor.withOpacity(0.5),
+                decorationColor: textColor.withValues(alpha: 0.5),
               ),
             ),
           ),

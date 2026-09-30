@@ -90,7 +90,7 @@ class _SoftTextFieldState extends State<SoftTextField> {
       shadows = [
         ...NeumorphismTheme.getInsetShadows(isDark, intensity: 0.5),
         BoxShadow(
-          color: AppColors.primary.withOpacity(0.4),
+          color: AppColors.primary.withValues(alpha: 0.4),
           blurRadius: 8,
           spreadRadius: 1,
         ),

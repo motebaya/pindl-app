@@ -71,9 +71,9 @@ extension _HomePageSection on _HomePageState {
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: AppColors.warning.withOpacity(0.1),
+        color: AppColors.warning.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
@@ -98,9 +98,9 @@ extension _HomePageSection on _HomePageState {
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
-        color: AppColors.error.withOpacity(0.1),
+        color: AppColors.error.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppColors.error.withOpacity(0.3)),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
@@ -265,9 +265,9 @@ extension _HomePageSection on _HomePageState {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: AppColors.warning.withOpacity(0.1),
+              color: AppColors.warning.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+              border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
             ),
             child: Row(
               children: [
@@ -410,7 +410,7 @@ extension _HomePageSection on _HomePageState {
                         size: 16,
                         color: settings.maxPages > 1
                             ? NeumorphismTheme.getTextColor(isDark)
-                            : NeumorphismTheme.getSecondaryTextColor(isDark).withOpacity(0.5),
+                            : NeumorphismTheme.getSecondaryTextColor(isDark).withValues(alpha: 0.5),
                       ),
                     ),
                   ),
@@ -442,7 +442,7 @@ extension _HomePageSection on _HomePageState {
                         size: 16,
                         color: settings.maxPages < 100
                             ? NeumorphismTheme.getTextColor(isDark)
-                            : NeumorphismTheme.getSecondaryTextColor(isDark).withOpacity(0.5),
+                            : NeumorphismTheme.getSecondaryTextColor(isDark).withValues(alpha: 0.5),
                       ),
                     ),
                   ),
@@ -457,7 +457,7 @@ extension _HomePageSection on _HomePageState {
                   activeTrackColor: AppColors.primary,
                   inactiveTrackColor: NeumorphismTheme.getSurfaceColor(isDark),
                   thumbColor: AppColors.primary,
-                  overlayColor: AppColors.primary.withOpacity(0.2),
+                  overlayColor: AppColors.primary.withValues(alpha: 0.2),
                   trackHeight: 4,
                   thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
                 ),

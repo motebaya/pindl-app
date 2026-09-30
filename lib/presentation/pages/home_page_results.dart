@@ -99,7 +99,7 @@ extension _HomePageResults on _HomePageState {
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(12), // Rounded square
                       border: Border.all(
-                        color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+                        color: NeumorphismTheme.getAccentColor(isDark).withValues(alpha: 0.5),
                         width: 2,
                       ),
                       boxShadow: NeumorphismTheme.getRaisedShadows(isDark, intensity: 0.5),
@@ -144,7 +144,7 @@ extension _HomePageResults on _HomePageState {
                       color: NeumorphismTheme.getSurfaceColor(isDark),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+                        color: NeumorphismTheme.getAccentColor(isDark).withValues(alpha: 0.5),
                         width: 2,
                       ),
                     ),
@@ -192,9 +192,9 @@ extension _HomePageResults on _HomePageState {
                 margin: const EdgeInsets.only(top: 4, bottom: 4),
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: AppColors.warning.withOpacity(0.1),
+                  color: AppColors.warning.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(4),
-                  border: Border.all(color: AppColors.warning.withOpacity(0.3)),
+                  border: Border.all(color: AppColors.warning.withValues(alpha: 0.3)),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -380,9 +380,9 @@ extension _HomePageResults on _HomePageState {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: AppColors.success.withOpacity(0.1),
+              color: AppColors.success.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppColors.success.withOpacity(0.3)),
+              border: Border.all(color: AppColors.success.withValues(alpha: 0.3)),
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,

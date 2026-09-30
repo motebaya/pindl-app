@@ -17,7 +17,10 @@ class AppColors {
   static const Color lightShadowLight = Color(0xFFFFFFFF);
   static const Color lightAccent = Color(0xFF4A90D9);  // Blue accent
   static const Color lightText = Color(0xFF424242);
-  static const Color lightTextSecondary = Color(0xFF757575);
+  // Phase 10.5 contrast fix (WCAG AA): 757575 measured 3.49–3.76:1 on the
+  // light surfaces — darkened to 636363 (4.55–4.73:1, lightness-only tweak
+  // per the a11y plan). Dark theme already ≥6:1, unchanged.
+  static const Color lightTextSecondary = Color(0xFF636363);
 
   // Dark theme colors
   static const Color darkBackground = Color(0xFF2D2D2D);

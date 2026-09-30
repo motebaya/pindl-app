@@ -24,7 +24,7 @@ extension _HomePagePreview on _HomePageState {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+                color: NeumorphismTheme.getAccentColor(isDark).withValues(alpha: 0.5),
                 width: 2,
               ),
             ),
@@ -39,7 +39,7 @@ extension _HomePagePreview on _HomePageState {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.7),
+                        color: Colors.black.withValues(alpha: 0.7),
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: const Row(
@@ -69,7 +69,7 @@ extension _HomePagePreview on _HomePageState {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+                color: NeumorphismTheme.getAccentColor(isDark).withValues(alpha: 0.5),
                 width: 2,
               ),
             ),
@@ -86,7 +86,7 @@ extension _HomePagePreview on _HomePageState {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+            color: NeumorphismTheme.getAccentColor(isDark).withValues(alpha: 0.5),
             width: 2,
           ),
         ),
@@ -104,7 +104,7 @@ extension _HomePagePreview on _HomePageState {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: NeumorphismTheme.getAccentColor(isDark).withOpacity(0.5),
+            color: NeumorphismTheme.getAccentColor(isDark).withValues(alpha: 0.5),
             width: 2,
           ),
         ),
@@ -120,7 +120,7 @@ extension _HomePagePreview on _HomePageState {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.7),
+                      color: Colors.black.withValues(alpha: 0.7),
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: const Row(
@@ -257,7 +257,7 @@ extension _HomePagePreview on _HomePageState {
             width: 60,
             height: 60,
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.6),
+              color: Colors.black.withValues(alpha: 0.6),
               shape: BoxShape.circle,
             ),
             child: const Padding(
@@ -276,7 +276,7 @@ extension _HomePagePreview on _HomePageState {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.7),
+              color: Colors.black.withValues(alpha: 0.7),
               borderRadius: BorderRadius.circular(4),
             ),
             child: Row(
@@ -305,7 +305,7 @@ extension _HomePagePreview on _HomePageState {
             child: Container(
               padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.6),
+                color: Colors.black.withValues(alpha: 0.6),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: const Icon(Icons.volume_off, color: Colors.white, size: 16),

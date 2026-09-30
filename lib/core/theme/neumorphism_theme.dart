@@ -10,12 +10,12 @@ class NeumorphismTheme {
     if (isDark) {
       return [
         BoxShadow(
-          color: AppColors.darkShadowDark.withOpacity(0.5 * intensity),
+          color: AppColors.darkShadowDark.withValues(alpha: 0.5 * intensity),
           offset: Offset(4 * intensity, 4 * intensity),
           blurRadius: 8 * intensity,
         ),
         BoxShadow(
-          color: AppColors.darkShadowLight.withOpacity(0.1 * intensity),
+          color: AppColors.darkShadowLight.withValues(alpha: 0.1 * intensity),
           offset: Offset(-4 * intensity, -4 * intensity),
           blurRadius: 8 * intensity,
         ),
@@ -23,12 +23,12 @@ class NeumorphismTheme {
     }
     return [
       BoxShadow(
-        color: AppColors.lightShadowDark.withOpacity(0.5 * intensity),
+        color: AppColors.lightShadowDark.withValues(alpha: 0.5 * intensity),
         offset: Offset(4 * intensity, 4 * intensity),
         blurRadius: 8 * intensity,
       ),
       BoxShadow(
-        color: AppColors.lightShadowLight.withOpacity(0.9 * intensity),
+        color: AppColors.lightShadowLight.withValues(alpha: 0.9 * intensity),
         offset: Offset(-4 * intensity, -4 * intensity),
         blurRadius: 8 * intensity,
       ),
@@ -40,12 +40,12 @@ class NeumorphismTheme {
     if (isDark) {
       return [
         BoxShadow(
-          color: AppColors.darkShadowDark.withOpacity(0.6 * intensity),
+          color: AppColors.darkShadowDark.withValues(alpha: 0.6 * intensity),
           offset: Offset(2 * intensity, 2 * intensity),
           blurRadius: 4 * intensity,
         ),
         BoxShadow(
-          color: AppColors.darkShadowLight.withOpacity(0.05 * intensity),
+          color: AppColors.darkShadowLight.withValues(alpha: 0.05 * intensity),
           offset: Offset(-2 * intensity, -2 * intensity),
           blurRadius: 4 * intensity,
         ),
@@ -53,12 +53,12 @@ class NeumorphismTheme {
     }
     return [
       BoxShadow(
-        color: AppColors.lightShadowDark.withOpacity(0.4 * intensity),
+        color: AppColors.lightShadowDark.withValues(alpha: 0.4 * intensity),
         offset: Offset(2 * intensity, 2 * intensity),
         blurRadius: 4 * intensity,
       ),
       BoxShadow(
-        color: AppColors.lightShadowLight.withOpacity(0.9 * intensity),
+        color: AppColors.lightShadowLight.withValues(alpha: 0.9 * intensity),
         offset: Offset(-2 * intensity, -2 * intensity),
         blurRadius: 4 * intensity,
       ),

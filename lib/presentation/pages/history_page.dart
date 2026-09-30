@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import '../utils/motion.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/neumorphism_theme.dart';
@@ -169,7 +170,7 @@ class _HistoryPageState extends ConsumerState<HistoryPage> {
         itemCount: items.length,
         separatorBuilder: (_, __) => Divider(
           height: 24,
-          color: NeumorphismTheme.getSecondaryTextColor(isDark).withOpacity(0.3),
+          color: NeumorphismTheme.getSecondaryTextColor(isDark).withValues(alpha: 0.3),
         ),
         itemBuilder: (context, index) {
           final item = items[index];
@@ -212,7 +213,7 @@ class _HistoryPageState extends ConsumerState<HistoryPage> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                    color: statusColor.withOpacity(0.2),
+                    color: statusColor.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
@@ -243,13 +244,15 @@ class _HistoryPageState extends ConsumerState<HistoryPage> {
               style: TextStyle(
                 fontSize: 10,
                 fontStyle: FontStyle.italic,
-                color: NeumorphismTheme.getSecondaryTextColor(isDark).withOpacity(0.6),
+                color: NeumorphismTheme.getSecondaryTextColor(isDark).withValues(alpha: 0.6),
               ),
             ),
           ],
         ),
       ),
-    ).animate().fadeIn(duration: 200.ms).slideX(begin: 0.05);
+    ).animate(autoPlay: motionEnabled(context))
+        .fadeIn(duration: 200.ms)
+        .slideX(begin: 0.05);
   }
 
   Color _getStatusColor(HistoryStatus status) {

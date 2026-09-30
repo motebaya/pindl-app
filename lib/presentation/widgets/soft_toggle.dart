@@ -9,12 +9,16 @@ class SoftToggle extends StatefulWidget {
   final double width;
   final double height;
 
+  /// Accessibility label (UX-5); null → service reads state only.
+  final String? semanticLabel;
+
   const SoftToggle({
     super.key,
     required this.value,
     this.onChanged,
     this.width = 56,
     this.height = 28,
+    this.semanticLabel,
   });
 
   @override
@@ -73,9 +77,16 @@ class _SoftToggleState extends State<SoftToggle>
     final thumbActiveColor =
         isDark ? AppColors.darkAccent : AppColors.lightAccent;
 
-    return GestureDetector(
-      onTap: () => widget.onChanged?.call(!widget.value),
-      child: AnimatedBuilder(
+    // UX-5 (Phase 10.5): expose role/state to accessibility services —
+    // TalkBack announces "<label>, switch, on/off" and toggling activates.
+    return Semantics(
+      button: false,
+      enabled: widget.onChanged != null,
+      toggled: widget.value,
+      label: widget.semanticLabel,
+      child: GestureDetector(
+        onTap: () => widget.onChanged?.call(!widget.value),
+        child: AnimatedBuilder(
         animation: _controller,
         builder: (context, child) {
           final thumbSize = widget.height - 6;
@@ -124,6 +135,7 @@ class _SoftToggleState extends State<SoftToggle>
             ),
           );
         },
+        ),
       ),
     );
   }

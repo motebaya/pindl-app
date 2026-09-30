@@ -32,50 +32,58 @@ class SoftCheckbox extends StatelessWidget {
     final double fontSize = compact ? 12 : 14;
     final double spacing = compact ? 6 : 10;
 
-    return GestureDetector(
-      onTap: enabled ? () => onChanged?.call(!value) : null,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: compact 
-            ? const EdgeInsets.symmetric(vertical: 4) 
-            : EdgeInsets.zero,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              width: boxSize,
-              height: boxSize,
-              decoration: BoxDecoration(
-                color: value ? accentColor : cardColor,
-                borderRadius: BorderRadius.circular(compact ? 4 : 6),
-                boxShadow: value
-                    ? NeumorphismTheme.getInsetShadows(isDark, intensity: 0.4)
-                    : NeumorphismTheme.getRaisedShadows(isDark, intensity: 0.5),
-              ),
-              child: value
-                  ? Icon(
-                      Icons.check,
-                      size: iconSize,
-                      color: Colors.white,
-                    )
-                  : null,
-            ),
-            if (label != null) ...[
-              SizedBox(width: spacing),
-              Text(
-                label!,
-                style: TextStyle(
-                  color: enabled
-                      ? textColor
-                      : NeumorphismTheme.getSecondaryTextColor(isDark),
-                  fontSize: fontSize,
-                  fontFamily: 'PlaypenSans',
-                  fontWeight: FontWeight.w700, // Bold
+    // UX-5 (Phase 10.5): role + checked state + label for TalkBack.
+    // excludeSemantics: the label Text is already carried by this node.
+    return Semantics(
+      enabled: enabled,
+      checked: value,
+      label: label,
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: enabled ? () => onChanged?.call(!value) : null,
+        behavior: HitTestBehavior.opaque,
+        child: Padding(
+          padding: compact
+              ? const EdgeInsets.symmetric(vertical: 4)
+              : EdgeInsets.zero,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                width: boxSize,
+                height: boxSize,
+                decoration: BoxDecoration(
+                  color: value ? accentColor : cardColor,
+                  borderRadius: BorderRadius.circular(compact ? 4 : 6),
+                  boxShadow: value
+                      ? NeumorphismTheme.getInsetShadows(isDark, intensity: 0.4)
+                      : NeumorphismTheme.getRaisedShadows(isDark, intensity: 0.5),
                 ),
+                child: value
+                    ? Icon(
+                        Icons.check,
+                        size: iconSize,
+                        color: Colors.white,
+                      )
+                    : null,
               ),
+              if (label != null) ...[
+                SizedBox(width: spacing),
+                Text(
+                  label!,
+                  style: TextStyle(
+                    color: enabled
+                        ? textColor
+                        : NeumorphismTheme.getSecondaryTextColor(isDark),
+                    fontSize: fontSize,
+                    fontFamily: 'PlaypenSans',
+                    fontWeight: FontWeight.w700, // Bold
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -117,54 +125,60 @@ class SoftRadio<T> extends StatelessWidget {
     final double fontSize = compact ? 12 : 14;
     final double spacing = compact ? 6 : 10;
 
-    return GestureDetector(
-      onTap: enabled ? () => onChanged?.call(value) : null,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: compact 
-            ? const EdgeInsets.symmetric(vertical: 4) 
-            : EdgeInsets.zero,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              width: boxSize,
-              height: boxSize,
-              decoration: BoxDecoration(
-                color: cardColor,
-                shape: BoxShape.circle,
-                boxShadow: _isSelected
-                    ? NeumorphismTheme.getInsetShadows(isDark, intensity: 0.4)
-                    : NeumorphismTheme.getRaisedShadows(isDark, intensity: 0.5),
-              ),
-              child: Center(
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  width: _isSelected ? innerSize : 0,
-                  height: _isSelected ? innerSize : 0,
-                  decoration: BoxDecoration(
-                    color: accentColor,
-                    shape: BoxShape.circle,
+    // UX-5 (Phase 10.5): radio role + selected state + label for TalkBack.
+    return Semantics(
+      enabled: enabled,
+      selected: _isSelected,
+      label: label,
+      child: GestureDetector(
+        onTap: enabled ? () => onChanged?.call(value) : null,
+        behavior: HitTestBehavior.opaque,
+        child: Padding(
+          padding: compact
+              ? const EdgeInsets.symmetric(vertical: 4)
+              : EdgeInsets.zero,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                width: boxSize,
+                height: boxSize,
+                decoration: BoxDecoration(
+                  color: cardColor,
+                  shape: BoxShape.circle,
+                  boxShadow: _isSelected
+                      ? NeumorphismTheme.getInsetShadows(isDark, intensity: 0.4)
+                      : NeumorphismTheme.getRaisedShadows(isDark, intensity: 0.5),
+                ),
+                child: Center(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    width: _isSelected ? innerSize : 0,
+                    height: _isSelected ? innerSize : 0,
+                    decoration: BoxDecoration(
+                      color: accentColor,
+                      shape: BoxShape.circle,
+                    ),
                   ),
                 ),
               ),
-            ),
-            if (label != null) ...[
-              SizedBox(width: spacing),
-              Text(
-                label!,
-                style: TextStyle(
-                  color: enabled
-                      ? textColor
-                      : NeumorphismTheme.getSecondaryTextColor(isDark),
-                  fontSize: fontSize,
-                  fontFamily: 'PlaypenSans',
-                  fontWeight: FontWeight.w700, // Bold
+              if (label != null) ...[
+                SizedBox(width: spacing),
+                Text(
+                  label!,
+                  style: TextStyle(
+                    color: enabled
+                        ? textColor
+                        : NeumorphismTheme.getSecondaryTextColor(isDark),
+                    fontSize: fontSize,
+                    fontFamily: 'PlaypenSans',
+                    fontWeight: FontWeight.w700, // Bold
+                  ),
                 ),
-              ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
