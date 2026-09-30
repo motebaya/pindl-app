@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import '../../core/media/video_selection.dart';
 import 'video_url.dart';
 
 /// Represents a single Pinterest pin item
@@ -66,48 +67,15 @@ class PinItem extends Equatable {
     // If videos is a List (empty array []), hasVideo remains false
     
     if (videoList != null && videoList.isNotEmpty) {
-      // Try to get direct MP4 first (V_720P with .mp4 extension)
-      final v720p = videoList['V_720P'] as Map<String, dynamic>?;
-      final v720pUrl = v720p?['url'] as String?;
-      
-      if (v720p != null && v720pUrl != null && v720pUrl.endsWith('.mp4')) {
-        // Direct MP4 available - use it without conversion
-        videoUrl = VideoUrl.fromJson(v720p, '720P', needConvert: false);
-        thumbnail = v720p['thumbnail'] as String?;
+      // Phase 07 (07.2): rendition ranking delegated to the pure selector —
+      // JS MP4_PREFERENCE order (720P→960P→480P→360P, then any MP4) with
+      // V_HLSV4 over V_HLSV3_MOBILE. Deliberate behavior change vs the legacy
+      // inline chain (720P-first / HLSV3-first); release-noted in 07.6.
+      final selected = selectVideo(videoList);
+      if (selected != null) {
+        videoUrl = selected;
+        thumbnail = selected.thumbnail;
         hasVideo = true;
-      } else {
-        // No direct MP4 - check for HLS variants (V_HLSV3_MOBILE or V_HLSV4)
-        // Node.js: let hls = loc?.V_HLSV3_MOBILE ?? loc?.V_HLSV4;
-        final hlsVariant = videoList['V_HLSV3_MOBILE'] as Map<String, dynamic>? ??
-                           videoList['V_HLSV4'] as Map<String, dynamic>?;
-        
-        if (hlsVariant != null && hlsVariant['url'] != null) {
-          // HLS available - mark as needing conversion
-          videoUrl = VideoUrl.fromJson(hlsVariant, 'HLS', needConvert: true);
-          thumbnail = hlsVariant['thumbnail'] as String?;
-          hasVideo = true;
-        } else if (v720p != null && v720pUrl != null) {
-          // V_720P exists but might be HLS (not .mp4)
-          final isHls = v720pUrl.endsWith('.m3u8');
-          videoUrl = VideoUrl.fromJson(v720p, '720P', needConvert: isHls);
-          thumbnail = v720p['thumbnail'] as String?;
-          hasVideo = true;
-        } else {
-          // Try any other available quality
-          for (final entry in videoList.entries) {
-            if (entry.value is Map<String, dynamic>) {
-              final vData = entry.value as Map<String, dynamic>;
-              final vUrl = vData['url'] as String?;
-              if (vUrl != null) {
-                final isHls = vUrl.endsWith('.m3u8');
-                videoUrl = VideoUrl.fromJson(vData, entry.key, needConvert: isHls);
-                thumbnail = vData['thumbnail'] as String?;
-                hasVideo = true;
-                break;
-              }
-            }
-          }
-        }
       }
     }
 

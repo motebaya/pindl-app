@@ -29,6 +29,109 @@ import 'dart:convert';
 import '../../data/models/author.dart';
 import '../../data/models/pin_item.dart';
 
+/// Request-scoped bookmark provenance (Phase 07 gate 07.4, D-34; design:
+/// planning/extraction/08-bookmark-context-design.md).
+///
+/// A Pinterest bookmark token is meaningful ONLY for the exact request that
+/// produced it. A stored bookmark is reusable ONLY when its full context
+/// matches the new request — never globally reusable. Any mismatch → no
+/// reuse, re-extract from page 1 (fail-safe direction).
+class BookmarkContext {
+  static const resourceUserPins = 'user_pins';
+
+  final String username;
+  final String resource;
+  final Map<String, dynamic> requestOptions;
+  final String extractionMode;
+  final int maxPages;
+  final String bookmark;
+
+  const BookmarkContext({
+    required this.username,
+    required this.resource,
+    required this.requestOptions,
+    required this.extractionMode,
+    required this.maxPages,
+    required this.bookmark,
+  });
+
+  /// Canonical JSON string with sorted keys — map ordering must never fake
+  /// a match or a mismatch.
+  static String _canonicalJson(Map<String, dynamic> map) {
+    final sorted = <String, dynamic>{};
+    final keys = map.keys.toList()..sort();
+    for (final k in keys) {
+      final v = map[k];
+      sorted[k] = v is Map<String, dynamic> ? _canonicalMap(v) : v;
+    }
+    return jsonEncode(sorted);
+  }
+
+  static Map<String, dynamic> _canonicalMap(Map<String, dynamic> map) {
+    final sorted = <String, dynamic>{};
+    final keys = map.keys.toList()..sort();
+    for (final k in keys) {
+      final v = map[k];
+      sorted[k] = v is Map<String, dynamic> ? _canonicalMap(v) : v;
+    }
+    return sorted;
+  }
+
+  /// Full-context match against the request being considered. Username is
+  /// case-insensitive (session-cache convention); options compared as
+  /// canonical JSON.
+  bool matches(BookmarkContext fresh) {
+    if (resource != fresh.resource) return false;
+    if (username.toLowerCase() != fresh.username.toLowerCase()) return false;
+    if (extractionMode != fresh.extractionMode) return false;
+    if (maxPages != fresh.maxPages) return false;
+    if (_canonicalJson(requestOptions) !=
+        _canonicalJson(fresh.requestOptions)) {
+      return false;
+    }
+    return true;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'username': username,
+        'resource': resource,
+        'request_options': requestOptions,
+        'extraction_mode': extractionMode,
+        'max_pages': maxPages,
+        'bookmarks': [bookmark],
+      };
+
+  /// Tolerant reader: anything malformed → null (no reuse), never an
+  /// exception (D-26 spirit).
+  static BookmarkContext? tryParse(Object? json) {
+    if (json is! Map<String, dynamic>) return null;
+    final username = json['username'];
+    final resource = json['resource'];
+    final options = json['request_options'];
+    final mode = json['extraction_mode'];
+    final maxPages = json['max_pages'];
+    final bookmarks = json['bookmarks'];
+    if (username is! String ||
+        resource is! String ||
+        options is! Map<String, dynamic> ||
+        mode is! String ||
+        maxPages is! int ||
+        bookmarks is! List<dynamic> ||
+        bookmarks.isEmpty ||
+        bookmarks.first is! String) {
+      return null;
+    }
+    return BookmarkContext(
+      username: username,
+      resource: resource,
+      requestOptions: options,
+      extractionMode: mode,
+      maxPages: maxPages,
+      bookmark: bookmarks.first as String,
+    );
+  }
+}
+
 /// Largest N such that every index 0..N is in [s]; -1 when empty.
 /// (Executable spec ported from the Phase 02 resume tests.)
 int maxContiguous(Set<int> s) {
@@ -65,6 +168,11 @@ class MetadataReadResult {
   /// typed result does not carry (e.g. legacy legacy reader paths) use this.
   final Map<String, dynamic>? jsonMap;
 
+  /// Phase 07 (07.5): capped-extraction continuation, present only when a
+  /// run ended at the page cap with a next bookmark. v2-additive.
+  final String? nextBookmark;
+  final BookmarkContext? bookmarkContext;
+
   const MetadataReadResult._({
     required this.schemaVersion,
     required this.outcome,
@@ -82,6 +190,8 @@ class MetadataReadResult {
     this.status,
     this.completedIndices,
     this.jsonMap,
+    this.nextBookmark,
+    this.bookmarkContext,
   });
 
   const MetadataReadResult.corrupt()
@@ -172,6 +282,20 @@ class MetadataReader {
       }
     }
 
+    // Phase 07 (07.5): bookmark provenance. The two fields travel together
+    // (D-34) — a next_bookmark without a parsable context is IGNORED (the
+    // D-24 dead-field lesson), and a context without a token is unusable.
+    String? nextBookmark;
+    BookmarkContext? bookmarkContext;
+    if (version >= 2) {
+      final bm = json['next_bookmark'];
+      final ctx = BookmarkContext.tryParse(json['bookmark_context']);
+      if (bm is String && bm.isNotEmpty && ctx != null) {
+        nextBookmark = bm;
+        bookmarkContext = ctx;
+      }
+    }
+
     final lastIndex = json['last_index_downloaded'] as int? ?? -1;
 
     // v2 keeps lastIndexDownloaded as the v1-compatible derived field;
@@ -196,6 +320,8 @@ class MetadataReader {
       status: json['status'] as String?,
       completedIndices: completed,
       jsonMap: json,
+      nextBookmark: nextBookmark,
+      bookmarkContext: bookmarkContext,
     );
   }
 
@@ -217,6 +343,8 @@ class MetadataReader {
     required bool wasInterrupted,
     String? mediaType,
     String? status,
+    String? nextBookmark,
+    BookmarkContext? bookmarkContext,
   }) {
     return {
       'schema': currentSchemaVersion,
@@ -233,6 +361,11 @@ class MetadataReader {
       'was_interrupted': wasInterrupted,
       'media_type': ?mediaType,
       'status': ?status,
+      // Phase 07 (D-34): the pair travels together or not at all.
+      if (nextBookmark != null && bookmarkContext != null) ...{
+        'next_bookmark': nextBookmark,
+        'bookmark_context': bookmarkContext.toJson(),
+      },
       'saved_at': DateTime.now().toIso8601String(),
     };
   }

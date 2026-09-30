@@ -1,6 +1,31 @@
 import 'package:equatable/equatable.dart';
 import 'author.dart';
 
+/// One carousel slot image (Phase 07, workstream 07.3). Order = slot order
+/// (JS-verified field order matches display order).
+class MediaSlot extends Equatable {
+  final String imageUrl;
+  final int? width;
+  final int? height;
+
+  const MediaSlot({required this.imageUrl, this.width, this.height});
+
+  Map<String, dynamic> toJson() => {
+        'imageUrl': imageUrl,
+        if (width != null) 'width': width,
+        if (height != null) 'height': height,
+      };
+
+  factory MediaSlot.fromJson(Map<String, dynamic> json) => MediaSlot(
+        imageUrl: json['imageUrl'] as String? ?? '',
+        width: json['width'] as int?,
+        height: json['height'] as int?,
+      );
+
+  @override
+  List<Object?> get props => [imageUrl, width, height];
+}
+
 /// Result of extracting media from a single pin
 /// Updated to match new parsing output format
 class MediaResult extends Equatable {
@@ -17,6 +42,10 @@ class MediaResult extends Equatable {
   final String? message;
   final Map<String, dynamic>? rawJson; // Store raw JSON for metadata export
 
+  /// Carousel slots in display order (Phase 07). Empty for non-carousel pins;
+  /// single-slot carousels behave identically to a plain image pin.
+  final List<MediaSlot> slots;
+
   const MediaResult({
     required this.author,
     required this.title,
@@ -30,6 +59,7 @@ class MediaResult extends Equatable {
     this.hasVideoContent = false,
     this.message,
     this.rawJson,
+    this.slots = const [],
   });
 
   /// Get the primary download URL based on media type preference
@@ -85,6 +115,11 @@ class MediaResult extends Equatable {
       hasImage: json['hasImage'] as bool? ?? false,
       hasVideoContent: json['hasVideoContent'] as bool? ?? false,
       message: json['message'] as String?,
+      slots: (json['slots'] as List<dynamic>?)
+              ?.whereType<Map<String, dynamic>>()
+              .map(MediaSlot.fromJson)
+              .toList() ??
+          const [],
     );
   }
 
@@ -101,6 +136,7 @@ class MediaResult extends Equatable {
     bool? hasVideoContent,
     String? message,
     Map<String, dynamic>? rawJson,
+    List<MediaSlot>? slots,
   }) {
     return MediaResult(
       author: author ?? this.author,
@@ -115,6 +151,7 @@ class MediaResult extends Equatable {
       hasVideoContent: hasVideoContent ?? this.hasVideoContent,
       message: message ?? this.message,
       rawJson: rawJson ?? this.rawJson,
+      slots: slots ?? this.slots,
     );
   }
 
@@ -131,5 +168,6 @@ class MediaResult extends Equatable {
         hasImage,
         hasVideoContent,
         message,
+        slots,
       ];
 }

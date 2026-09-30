@@ -1,5 +1,25 @@
 # Release Notes
 
+## 3.1.0 (unreleased — content staged in Phase 07)
+
+### Behavior change (intended)
+
+- **Better video quality picks.** For pins offering multiple renditions, PinDL now
+  downloads the best available MP4 (720P → 960P → 480P → 360P) instead of always
+  preferring 720P, and prefers the **V_HLSV4** HLS stream over V_HLSV3_MOBILE when
+  only HLS is offered (newer master, usually higher quality). The same pin may
+  therefore yield a different (better) file than before.
+- **Carousel pins fully supported.** Multi-image pins now download one file per
+  image (`<pinId>_image_1..n`) instead of only the first.
+- **Feed quality:** duplicate pins across pages are removed; capped feeds show a
+  "Fetch more" button instead of silently stopping (the continuation cursor is
+  stored together with its full request context and reused only on an exact match).
+
+### Reliability (carried from 2.1.x work)
+
+- Large downloads resume at the byte level after interruptions (Range requests,
+  verified against the Pinterest CDN) — see phase 06 evidence appendix.
+
 ## 2.1.0 - 2026-02-12
 
 ### TL;DR (Recommended)

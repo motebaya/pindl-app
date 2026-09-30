@@ -22,6 +22,9 @@ class Fixtures {
   static String pinVideo() => _load('html/pin_video.html');
   static String pinNotFound() => _load('html/pin_notfound.html');
   static String pinStubOnly() => _load('html/pin_stub_only.html');
+  static String pinStubThenRich() => _load('html/pin_stub_then_rich.html');
+  static String pinFlatImages() => _load('html/pin_flat_images.html');
+  static String pinCarousel() => _load('html/pin_carousel.html');
 
   // API fixtures
   static Map<String, dynamic> userPinsPage1() =>

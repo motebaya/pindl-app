@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/config/build_config.dart';
 import '../../core/exceptions/pinterest_exception.dart';
+import '../../core/persistence/metadata_schema.dart';
 import '../../core/utils/format_utils.dart';
 import '../../core/utils/pin_url_validator.dart';
 import '../../data/models/author.dart';
@@ -21,7 +22,6 @@ import '../../data/services/pinterest_extractor_service.dart';
 import '../../data/services/task_state_persistence.dart';
 import '../../data/models/background_task_state.dart';
 import '../utils/error_messages.dart';
-import '../../core/persistence/metadata_schema.dart';
 import 'history_provider.dart';
 import 'log_provider.dart';
 import 'foreground_service_manager.dart';
@@ -67,6 +67,12 @@ class AppJobState {
   /// semantics — documented degradation, D-04 contract).
   final Set<int> previousCompletedIndices;
 
+  /// Phase 07 (07.5, D-34): capped-extraction continuation. Non-null only
+  /// when the last feed extraction hit the page cap with more pages pending;
+  /// travels with its full request context or not at all.
+  final String? nextBookmark;
+  final BookmarkContext? bookmarkContext;
+
   const AppJobState({
     this.status = JobStatus.idle,
     this.input,
@@ -91,6 +97,8 @@ class AppJobState {
     this.imagesFullyDownloaded = false,
     this.videosFullyDownloaded = false,
     this.previousCompletedIndices = const {},
+    this.nextBookmark,
+    this.bookmarkContext,
   });
 
   /// Derived state: is currently fetching info (Phase B)
@@ -124,6 +132,13 @@ class AppJobState {
       status == JobStatus.readyToDownload;
 
   int get totalItems => pins.length;
+
+  /// Phase 07 (07.5, D-34): "Fetch more" is available only when the last
+  /// capped extraction left a resumable bookmark + provenance context.
+  bool get canFetchMore =>
+      nextBookmark != null &&
+      bookmarkContext != null &&
+      (status == JobStatus.readyToDownload || status == JobStatus.completed);
   
   /// Calculate remaining items for continue mode.
   /// Uses accumulated download counts (success + skipped + failed) from metadata
@@ -167,6 +182,8 @@ class AppJobState {
     bool? imagesFullyDownloaded,
     bool? videosFullyDownloaded,
     Set<int>? previousCompletedIndices,
+    String? nextBookmark,
+    BookmarkContext? bookmarkContext,
   }) {
     return AppJobState(
       status: status ?? this.status,
@@ -192,6 +209,8 @@ class AppJobState {
       imagesFullyDownloaded: imagesFullyDownloaded ?? this.imagesFullyDownloaded,
       videosFullyDownloaded: videosFullyDownloaded ?? this.videosFullyDownloaded,
       previousCompletedIndices: previousCompletedIndices ?? this.previousCompletedIndices,
+      nextBookmark: nextBookmark ?? this.nextBookmark,
+      bookmarkContext: bookmarkContext ?? this.bookmarkContext,
     );
   }
 
@@ -488,6 +507,24 @@ class JobNotifier extends StateNotifier<AppJobState> {
     _logService.parse('Parsed ${result.pins.length} pins');
     _logService.parse('Images: ${result.totalImages}, Videos: ${result.totalVideos}');
     
+    // Phase 07 (07.5, D-34): capture the capped-extraction cursor WITH its
+    // request context, or clear any stale one (fresh extraction = new world).
+    BookmarkContext? newContext;
+    if (result.bookmark != null) {
+      newContext = BookmarkContext(
+        username: normalizedUsername,
+        resource: BookmarkContext.resourceUserPins,
+        requestOptions: _extractor.canonicalRequestOptions(normalizedUsername),
+        extractionMode: mediaType.name,
+        maxPages: maxPages,
+        bookmark: result.bookmark!,
+      );
+      // Cap note (contract 07.5): honest wording — the count of remaining
+      // items is unknowable without fetching.
+      _logService.queue(
+          'Page cap reached — more items may be available (use Fetch More)');
+    }
+    
     // Transition to Phase C: readyToDownload
     state = state.copyWith(
       status: JobStatus.readyToDownload,
@@ -495,6 +532,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
       pins: result.pins,
       totalImages: result.totalImages,
       totalVideos: result.totalVideos,
+      nextBookmark: result.bookmark,
+      bookmarkContext: newContext,
     );
     
     // REVISION 1: Save metadata immediately after parsing (before download)
@@ -512,12 +551,136 @@ class JobNotifier extends StateNotifier<AppJobState> {
         wasInterrupted: false,
         mediaType: mediaType.name,
         status: 'parsed', // Mark as parsed but not downloaded yet
+        nextBookmark: state.nextBookmark,
+        bookmarkContext: state.bookmarkContext,
       );
       await _saveMetadata(baseFolder, '${result.author.userId}.json', metadataJson);
       _logService.saved('Metadata saved for @${result.author.username}');
     }
     
     _logService.complete('Info loaded for @${result.author.username}. Ready to download.');
+  }
+
+  /// Phase 07 (07.5, D-34): "Fetch more" — one-hop continuation of a capped
+  /// feed extraction. Reuses the stored bookmark ONLY on full context match;
+  /// any mismatch (or a cross-user session drift) falls back to a fresh
+  /// extraction from page 1 (fail-safe direction). Results merge with dedupe
+  /// by pin id (first occurrence wins — 07.2 G5). Each press is a visible,
+  /// cancellable run — never a silent loop.
+  Future<void> fetchMore({
+    required MediaType mediaType,
+    int maxPages = 50,
+    bool saveMetadata = false,
+  }) async {
+    final stored = state.bookmarkContext;
+    final token = state.nextBookmark;
+    if (stored == null || token == null) return;
+    if (state.isExtracting || state.isDownloading) return;
+
+    // Provenance check: the fresh context captures what this continuation
+    // request WOULD be. computed from the service's current session config —
+    // if another user was extracted in between, the user_id diverges and the
+    // match fails (exactly the wrong-feed hazard D-34 exists to prevent).
+    final fresh = BookmarkContext(
+      username: stored.username,
+      resource: BookmarkContext.resourceUserPins,
+      requestOptions: _extractor.canonicalRequestOptions(stored.username),
+      extractionMode: mediaType.name,
+      maxPages: maxPages,
+      bookmark: token,
+    );
+    if (!stored.matches(fresh)) {
+      _logService.queue('Bookmark context changed — re-extracting from page 1');
+      await startExtraction(
+        input: stored.username,
+        mediaType: mediaType,
+        saveMetadata: saveMetadata,
+        maxPages: maxPages,
+      );
+      return;
+    }
+
+    _logService.fetch('Fetching more pins for @${stored.username}...');
+    state = state.copyWith(status: JobStatus.fetchingInfo);
+    _extractCancelToken = CancelToken();
+    try {
+      final result = await _extractor.getUserPins(
+        username: stored.username,
+        bookmark: token,
+        maxPages: maxPages,
+        cancelToken: _extractCancelToken,
+        onProgress: (count, currentPage, maxPage) {
+          _logService.fetch('Fetched $count more pins (page $currentPage/$maxPage)...');
+          onExtractionProgress?.call(
+            username: stored.username,
+            itemCount: state.pins.length + count,
+            currentPage: currentPage,
+            maxPage: maxPage,
+          );
+        },
+      );
+
+      // Merge with dedupe by pin id — first occurrence wins (07.2).
+      final seen = state.pins.map((p) => p.pinId).toSet();
+      final merged = [
+        ...state.pins,
+        ...result.pins.where((p) => !seen.contains(p.pinId)),
+      ];
+      _logService.parse('Fetched ${merged.length - state.pins.length} more pins (total ${merged.length})');
+
+      // Continue again only if THIS run also ended capped.
+      BookmarkContext? newContext;
+      if (result.bookmark != null) {
+        newContext = BookmarkContext(
+          username: stored.username,
+          resource: BookmarkContext.resourceUserPins,
+          requestOptions: _extractor.canonicalRequestOptions(stored.username),
+          extractionMode: mediaType.name,
+          maxPages: maxPages,
+          bookmark: result.bookmark!,
+        );
+        _logService.queue('Page cap reached — more items may be available (use Fetch More)');
+      }
+
+      state = state.copyWith(
+        status: JobStatus.readyToDownload,
+        author: result.author,
+        pins: merged,
+        totalImages: merged.where((p) => p.hasImage).length,
+        totalVideos: merged.where((p) => p.hasVideo).length,
+        nextBookmark: result.bookmark,
+        bookmarkContext: newContext,
+      );
+
+      // Parse-time metadata rewrite keeps the file's pins/bookmark in sync
+      // with the merged feed (download-time writes always use state.pins).
+      if (saveMetadata && state.author != null) {
+        final metadataJson = MetadataReader.buildV2Metadata(
+          author: state.author!,
+          pins: merged,
+          completedIndices: const {},
+          totalImages: state.totalImages,
+          totalVideos: state.totalVideos,
+          successDownloaded: 0,
+          skipDownloaded: 0,
+          failedDownloaded: 0,
+          wasInterrupted: false,
+          mediaType: mediaType.name,
+          status: 'parsed',
+          nextBookmark: state.nextBookmark,
+          bookmarkContext: state.bookmarkContext,
+        );
+        await _saveMetadata(
+            'PinDL/@${stored.username}', '${state.author!.userId}.json', metadataJson);
+      }
+      _logService.complete('Fetch more complete for @${stored.username}.');
+    } catch (e) {
+      _logService.error('Fetch more failed: ${userMessage(e)}');
+      state = state.copyWith(
+        status: JobStatus.failed,
+        error: userMessage(e),
+      );
+    }
   }
 
   Future<void> _extractSinglePin(String pinInput, MediaType mediaType) async {
@@ -752,6 +915,63 @@ class JobNotifier extends StateNotifier<AppJobState> {
     
     // Download thumbnail/image if requested
     if (downloadImage) {
+      // Phase 07 (07.3): carousel pins yield one download per slot, in slot
+      // order, with deterministic indexed names (<pinId>_image_<n>.<ext>,
+      // 1-based). Each slot is an independent history entry with its own
+      // failed/skip counting; skip-existing covers re-runs (names stable).
+      if (result.slots.length > 1) {
+        for (var i = 0; i < result.slots.length; i++) {
+          final slotUrl = result.slots[i].imageUrl;
+          final filename = FormatUtils.pinFilename(
+            pinId: result.pinId,
+            role: 'image',
+            url: slotUrl,
+            imageIndex: i + 1,
+          );
+          _logService.downloading('Downloading carousel image: $filename');
+          try {
+            await _downloadService.downloadFile(
+              url: slotUrl,
+              outputPath: outputPath,
+              filename: filename,
+              pinId: '${result.pinId}_img$i',
+              overwrite: overwrite,
+            );
+            _logService.saved('Saved: $filename');
+            downloaded++;
+            _onDownloadComplete?.call(
+              filename: filename,
+              url: slotUrl,
+              status: HistoryStatus.success,
+            );
+          } on DownloadException catch (e) {
+            if (e.message.contains('already exists')) {
+              _logService.skipped('Skipped: $filename (exists)');
+              skipped++;
+            } else {
+              _logService.error('Failed: $filename - ${e.message}');
+              failed++;
+              _onDownloadComplete?.call(
+                filename: filename,
+                url: slotUrl,
+                status: HistoryStatus.failed,
+                errorMessage: e.message,
+              );
+            }
+          } catch (e) {
+            _logService.error('Failed: $filename - $e');
+            failed++;
+            _onDownloadComplete?.call(
+              filename: filename,
+              url: slotUrl,
+              status: HistoryStatus.failed,
+              errorMessage: userMessage(e),
+            );
+          }
+        }
+        // Carousel handled; fall through to the video branch only.
+      } else
+      {
       final imageUrl = result.getImageDownloadUrl(useThumbnailForVideo: true);
       if (imageUrl != null) {
         // Deterministic filename: <pinId>_image.jpg or <pinId>_thumbnail.jpg
@@ -801,6 +1021,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
           );
         }
       }
+      } // single-image path (non-carousel)
     }
     
     // Download video if requested
@@ -1289,6 +1510,8 @@ class JobNotifier extends StateNotifier<AppJobState> {
         failedDownloaded: totalFailed,
         wasInterrupted: wasInterrupted,
         mediaType: mediaType.name,
+        nextBookmark: state.nextBookmark,
+        bookmarkContext: state.bookmarkContext,
       );
       await _saveMetadata(baseFolder, '${author.userId}.json', metadataJson);
     }

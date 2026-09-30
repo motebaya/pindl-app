@@ -1323,6 +1323,30 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
               ),
             ],
           ],
+
+          // Phase 07 (07.5): "Fetch more" — shown only when the last feed
+          // extraction ended capped and left a resumable bookmark context.
+          // The provider re-verifies the full provenance on press (D-34).
+          if (isUsernameMode && jobState.canFetchMore && !jobState.isDownloading) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  ref.read(jobProvider.notifier).fetchMore(
+                        mediaType: settings.mediaType,
+                        maxPages: settings.maxPages,
+                        saveMetadata: settings.saveMetadata,
+                      );
+                },
+                icon: const Icon(Icons.download_for_offline_outlined, size: 16),
+                label: const Text(
+                  'Fetch more',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

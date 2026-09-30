@@ -168,8 +168,12 @@ class PinterestExtractorService {
 
     // Accumulated data (like Node.js this.userData)
     final List<PinItem> allPins = [];
+    final Set<String> seenPinIds = {};
     Author? author;
     String? currentBookmark = bookmark;
+    // The bookmark the NEXT page would use — non-null only when the feed
+    // actually has more pages (distinguishes cap-exit from natural end).
+    String? pendingBookmark;
     int currentPage = 0;
     int consecutiveEmptyPages = 0;
 
@@ -196,6 +200,11 @@ class PinterestExtractorService {
       
       final List<dynamic> data = pageData['data'] ?? [];
       final String? nextBookmark = pageData['bookmark'];
+      // The pending continuation is ALWAYS the last served page's answer —
+      // a null here proves the feed ended naturally, regardless of history.
+      pendingBookmark = (nextBookmark != null && nextBookmark.isNotEmpty)
+          ? nextBookmark
+          : null;
       final Author? pageAuthor = pageData['author'];
       
       // Set author from first page with data (like Node.js line 211-217)
@@ -226,10 +235,15 @@ class PinterestExtractorService {
       // Reset empty page counter since we got data
       consecutiveEmptyPages = 0;
       
-      // Parse pins from data array (like Node.js line 195-206)
+      // Parse pins from data array (like Node.js line 195-206), deduped by
+      // id (JS dedupeById — Phase 07 G5): overlapping bookmarks can repeat
+      // rows; first occurrence wins.
       for (final item in data) {
         if (item is Map<String, dynamic>) {
-          allPins.add(PinItem.fromUserPinJson(item));
+          final pin = PinItem.fromUserPinJson(item);
+          if (seenPinIds.contains(pin.pinId)) continue;
+          seenPinIds.add(pin.pinId);
+          allPins.add(pin);
         }
       }
       
@@ -262,13 +276,38 @@ class PinterestExtractorService {
     if (author == null) {
       throw ParseException('Could not extract author from any page');
     }
-    
+
+    // Phase 07 (07.5, D-34): a bookmark is returned ONLY when the loop ended
+    // because the page CAP was reached while the feed still has pages —
+    // that cursor + its request context is the "Fetch more" re-entry. Every
+    // other exit (natural end, empty pages, parse stop) returns null, exactly
+    // like before.
+    final bool capped =
+        currentPage >= effectiveMaxPages &&
+        pendingBookmark != null &&
+        pendingBookmark.isNotEmpty;
+    if (capped && verbose) {
+      _logFetch('page cap reached ($effectiveMaxPages); bookmark retained for fetch-more');
+    }
     return UserPinsResult.fromApiResponse(
       author: author,
       pins: allPins,
-      bookmark: null, // Final result has no bookmark
+      bookmark: capped ? pendingBookmark : null,
     );
   }
+
+  /// Canonical request options for the user-pins resource — the exact payload
+  /// options `_fetchSinglePage` sends (D-34 provenance tuple). Call AFTER a
+  /// getUserPins run so [_config] belongs to the same username (PAR-X1
+  /// invariant: the service owns its cache identity).
+  Map<String, dynamic> canonicalRequestOptions(String username) => {
+        'exclude_add_pin_rep': true,
+        'field_set_key': 'grid_item',
+        'is_own_profile_pins': false,
+        'redux_normalize_feed': true,
+        'user_id': _config?.userId ?? '',
+        'username': username,
+      };
 
   /// Fetch a single page and return raw parsed data
   /// Returns: { 'data': List, 'bookmark': String?, 'author': Author? }

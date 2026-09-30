@@ -4,8 +4,10 @@ import 'package:pindl/data/models/pin_item.dart';
 import '../helpers/fixture_loader.dart';
 
 /// Characterization: PinItem.fromUserPinJson media selection.
-/// Pins CURRENT ranking: V_720P(.mp4) direct -> V_HLSV3_MOBILE/V_HLSV4 (needConvert)
-/// -> any other entry. (JS parity ranking is Phase 07 — changes will diff here.)
+/// PHASE 07 FLIP (07.2, gate G2 — deliberate, documented): rendition ranking
+/// delegated to core/media/video_selection.dart (JS MP4_PREFERENCE port):
+/// MP4 720P→960P→480P→360P, then any MP4, then HLS V_HLSV4 over
+/// V_HLSV3_MOBILE (legacy code preferred HLSV3 — intended change, release-noted).
 void main() {
   group('image pin', () {
     test('images.orig.url -> imageUrl, hasVideo false', () {
@@ -39,7 +41,7 @@ void main() {
   });
 
   group('HLS-only (V_HLSV3_MOBILE / V_HLSV4)', () {
-    test('V_HLSV3_MOBILE preferred, marked needConvert', () {
+    test('V_HLSV4 preferred (Phase 07 flip: JS ranks V_HLSV4 first), needConvert', () {
       final pin = PinItem.fromUserPinJson({
         'id': '333333333333333333',
         'title': 'hls3',
@@ -50,7 +52,10 @@ void main() {
         }},
       });
       expect(pin.hasVideo, isTrue);
-      expect(pin.videoUrl!.url, 'https://v.pinimg.com/hls3.m3u8');
+      // FLIPPED in Phase 07 (07.2): was V_HLSV3_MOBILE-first; JS parity and
+      // the audit mark V_HLSV4 the newer master (audits/parity/media.md).
+      expect(pin.videoUrl!.url, 'https://v.pinimg.com/hls4.m3u8');
+      expect(pin.videoUrl!.quality, 'HLS');
       expect(pin.videoUrl!.needConvert, isTrue);
       expect(pin.videoUrl!.isHls, isTrue);
     });
