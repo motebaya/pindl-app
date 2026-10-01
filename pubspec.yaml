@@ -1,7 +1,7 @@
 name: pindl
 description: "Pinterest Downloader - Personal Use Utility"
 publish_to: 'none'
-version: 2.1.0+6
+version: 3.1.0+7
 
 environment:
   sdk: ^3.10.8
