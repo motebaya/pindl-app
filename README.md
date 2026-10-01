@@ -123,6 +123,16 @@ flowchart TD
 | Video preview playback               | ✅     |
 | Continue from last position          | ✅     |
 
+## Documentation
+
+- [Getting Started](docs/getting-started.md)
+- [Usage](docs/usage.md)
+- [Downloads](docs/downloads.md)
+- [Boards](docs/boards.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Architecture](docs/architecture.md) (contributor)
+- [Development](docs/development.md) (contributor)
+
 ## Project Structure
 
 ```
