@@ -152,7 +152,7 @@ android/
 ```
 
 > Business orchestration lives in `presentation/providers` (job/extraction/
-> download coordination); see `audits/architecture` for the Phase 08 split.
+> download coordination).
 
 ## Building
 
@@ -248,12 +248,10 @@ chmod +x build_prod.sh
 - `ffmpeg`: includes FFmpeg for HLS → MP4 conversion
 - `all`: Builds both flavors
 
-**Measured APK sizes** (on-disk, D-02 convention; release, minify+shrink):
-lite universal **59.1 MB** and ffmpeg universal **129.7 MB** (2026-10-01,
-Flutter 3.47.5, post-font-purge); baseline per-ABI splits from the
-2026-09-29 audit: lite arm64 24.6 MB, ffmpeg arm64 43.9 MB. Full canonical
-table: `audits/app-size/app-size.md` and the Phase 12 report
-(`reports/phases/12-performance-size-hygiene.md`).
+**Measured APK sizes** (on-disk decimal; release, minify+shrink,
+Flutter 3.47.5, 2026-10-01): lite universal **59.0 MB**, ffmpeg
+universal **136.0 MB**; per-ABI splits (2026-09-29 audit): lite arm64
+24.6 MB, ffmpeg arm64 43.9 MB.
 
 **Split ABI Benefits:**
 - Reduces APK size by ~40-60% per architecture

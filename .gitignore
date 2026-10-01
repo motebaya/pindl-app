@@ -77,3 +77,9 @@ rename*
 workflow*.md
 
 trash/*
+
+# Internal agent/development corpus (local-only, never public)
+/contexts/
+/audits/
+/planning/
+/reports/
