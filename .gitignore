@@ -83,3 +83,5 @@ trash/*
 /audits/
 /planning/
 /reports/
+# Human QA playbook + run records (internal, never public)
+/qa/
