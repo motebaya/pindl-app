@@ -184,6 +184,13 @@ class MetadataReadResult {
   /// only when the file carries one; user-feed files read as null.
   final BoardResume? boardResume;
 
+  /// Feed/Board carousel migration: the coordinate space `completed_indices`
+  /// lives in. [MetadataReader.feedItemPlanExpanded] means "absolute indices
+  /// over the EXPANDED item plan (one item per carousel slide)"; null/absent
+  /// means the pre-migration pin-level space. The resume path must NOT
+  /// interpret one space as the other (see `feed_plan_migration.dart`).
+  final String? itemPlan;
+
   const MetadataReadResult._({
     required this.schemaVersion,
     required this.outcome,
@@ -204,6 +211,7 @@ class MetadataReadResult {
     this.nextBookmark,
     this.bookmarkContext,
     this.boardResume,
+    this.itemPlan,
   });
 
   const MetadataReadResult.corrupt()
@@ -252,6 +260,11 @@ class MetadataReader {
   MetadataReader._();
 
   static const int currentSchemaVersion = 2;
+
+  /// Feed/Board carousel migration: value of the v2-additive `item_plan`
+  /// field written by this version. Records without the field are pre-
+  /// migration (one item per pin) and are re-projected before compare.
+  static const String feedItemPlanExpanded = 'pin-expanded';
 
   /// Decode-and-read entry point for raw file content (04.4 corruption
   /// handling): truncated/invalid JSON or a non-object root → corrupt
@@ -317,6 +330,13 @@ class MetadataReader {
 
     final lastIndex = json['last_index_downloaded'] as int? ?? -1;
 
+    // Feed/Board carousel migration: additive item-plan marker. A non-string
+    // or empty value is treated as absent (never as "expanded").
+    final itemPlanRaw = json['item_plan'];
+    final itemPlan = itemPlanRaw is String && itemPlanRaw.isNotEmpty
+        ? itemPlanRaw
+        : null;
+
     // v2 keeps lastIndexDownloaded as the v1-compatible derived field;
     // when absent from the file, derive it from the completion set.
     final effectiveLastIndex =
@@ -342,6 +362,7 @@ class MetadataReader {
       nextBookmark: nextBookmark,
       bookmarkContext: bookmarkContext,
       boardResume: boardResume,
+      itemPlan: itemPlan,
     );
   }
 
@@ -366,6 +387,7 @@ class MetadataReader {
     String? nextBookmark,
     BookmarkContext? bookmarkContext,
     BoardResume? boardResume,
+    String? itemPlan,
   }) {
     return {
       'schema': currentSchemaVersion,
@@ -390,6 +412,9 @@ class MetadataReader {
       // Phase 09.5: board resume block, v2-additive — absent for user-feed
       // files (backward compatible: readers without board support ignore it).
       if (boardResume != null) 'board_resume': boardResume.toJson(),
+      // Feed/Board carousel migration: records the coordinate space of
+      // `completed_indices` so a later continue can never mis-read it.
+      'item_plan': ?itemPlan,
       'saved_at': DateTime.now().toIso8601String(),
     };
   }

@@ -77,6 +77,22 @@ class PlannedDownload {
   final bool isHls;
   final String subFolder;
   final String role;
+
+  /// 0-based slide index inside a carousel pin; null for every single-item
+  /// pin. Feed/Board carousel migration: a pin whose row carries N>1 slides
+  /// produces N items (`role: 'image'`), so N slides are downloaded and each
+  /// one is tracked separately. Non-carousel items keep `slotIndex == null`
+  /// and behave byte-identically to before.
+  final int? slotIndex;
+
+  /// Unique per-ITEM key. For a single-item pin this IS the pinId (so every
+  /// existing key/callback/history path is unchanged); for a carousel slide it
+  /// is `<pinId>_img<n>` (1-based, matching the single-pin carousel naming
+  /// family). Completion indices, the queue id, the cancel-token key and the
+  /// history map all key on this, so slides can never alias one another
+  /// (which a pinId key would do).
+  String get key => slotIndex == null ? pinId : '${pinId}_img${slotIndex! + 1}';
+
   const PlannedDownload({
     required this.pinId,
     required this.title,
@@ -85,6 +101,7 @@ class PlannedDownload {
     required this.isHls,
     required this.subFolder,
     required this.role,
+    this.slotIndex,
   });
 }
 
@@ -197,9 +214,17 @@ class DownloadCoordinator {
     this.hlsConverter,
   });
 
-  /// Plans the download items for a feed (Node.js logic, verbatim):
-  /// video mode → videos only; image mode → images, falling back to video
-  /// thumbnails for video pins without a separate image.
+  /// Plans the download items for a feed/board run: video mode → videos only
+  /// (unchanged); image mode → images, falling back to video thumbnails for
+  /// video pins without a separate image, and — Feed/Board carousel migration
+  /// — ONE item per carousel slide when the pin's row carried N>1 slides.
+  ///
+  /// Index space: the returned list IS the absolute index space the D-04
+  /// completion set and the v2 `completed_indices` array are keyed on. A pin
+  /// with N slides therefore contributes N consecutive indices, in slot order,
+  /// which is exactly what makes a partially downloaded carousel a set of
+  /// holes (never counted complete). Legacy records written before this change
+  /// are re-projected by `core/persistence/feed_plan_migration.dart`.
   static List<PlannedDownload> planFeedItems({
     required List<PinItem> pins,
     required MediaType mediaType,
@@ -222,7 +247,23 @@ class DownloadCoordinator {
           ));
         }
       } else {
-        if (pin.hasImage && pin.imageUrl != null) {
+        // Carousel first: a row with N>1 slides is N items (slot order =
+        // display order). `imageSlots.length <= 1` falls through to the
+        // single-image path unchanged.
+        if (pin.imageSlots.length > 1) {
+          for (var slot = 0; slot < pin.imageSlots.length; slot++) {
+            items.add(PlannedDownload(
+              pinId: pin.pinId,
+              title: pin.title,
+              url: upgradePinterestImageUrl(pin.imageSlots[slot]),
+              isVideo: false,
+              isHls: false,
+              subFolder: imagesFolder,
+              role: 'image',
+              slotIndex: slot,
+            ));
+          }
+        } else if (pin.hasImage && pin.imageUrl != null) {
           items.add(PlannedDownload(
             pinId: pin.pinId,
             title: pin.title,
@@ -658,7 +699,10 @@ class DownloadCoordinator {
     final sameMediaType =
         previousMediaType == null || previousMediaType == mediaType.name;
 
-    // Build a map of pinId -> (url, filename) for history tracking.
+    // Build a map of item key -> (url, filename) for history tracking. The key
+    // is the pinId for single-item pins (unchanged) and `<pinId>_img<n>` for a
+    // carousel slide (Feed/Board carousel migration) — a pinId-keyed map would
+    // make every slide of one pin alias the same entry.
     final Map<String, (String url, String filename)> pinUrlMap = {};
 
     // Separate HLS items (need special processing) from regular items.
@@ -669,12 +713,19 @@ class DownloadCoordinator {
     for (var i = 0; i < regularItems.length; i++) {
       final item = regularItems[i];
       final filename = FormatUtils.pinFilename(
-          pinId: item.pinId, role: item.role, url: item.url);
-      pinUrlMap[item.pinId] = (item.url, filename);
+        pinId: item.pinId,
+        role: item.role,
+        url: item.url,
+        // Carousel slide → `<pinId>_image_<n>` (1-based), the same naming the
+        // single-pin carousel path uses (D-48); single-item pins keep the
+        // plain `<pinId>_image.<ext>` name byte-for-byte.
+        imageIndex: item.slotIndex == null ? null : item.slotIndex! + 1,
+      );
+      pinUrlMap[item.key] = (item.url, filename);
 
       downloadService.enqueue(
-        id: '${item.pinId}_${startIndex + i}',
-        pinId: item.pinId,
+        id: '${item.key}_${startIndex + i}',
+        pinId: item.key,
         title: item.title.isEmpty ? item.pinId : item.title,
         url: item.url,
         outputPath: outputPath,
@@ -688,9 +739,13 @@ class DownloadCoordinator {
     // coordinates). The previous session's set merges only when the media
     // type matches (otherwise indices refer to a different item list).
     final sessionCompleted = <int>{};
-    final regularIndexByPin = <String, int>{
-      for (var i = 0; i < regularItems.length; i++)
-        regularItems[i].pinId: startIndex + i,
+    // Absolute index of every planned item, keyed by ITEM key — never by
+    // pinId (with carousel expansion one pin owns several indices). Derived
+    // from the full planned list, so HLS and regular items interleaved in pin
+    // order each report their OWN index (the old `regularItems.length + i`
+    // arithmetic assumed HLS items sat in a tail block).
+    final indexByKey = <String, int>{
+      for (var i = 0; i < downloadItems.length; i++) downloadItems[i].key: i,
     };
 
     // Process regular queue first (sliding-window contract unchanged).
@@ -699,9 +754,10 @@ class DownloadCoordinator {
         overwrite: overwrite,
         subFolder: isVideoOnly ? videosFolder : imagesFolder,
         onCompleted: (pinId) {
+          // `pinId` here is the item key (== pinId for single-item pins).
           hooks.saved('Saved: $pinId');
           // D-04: success = complete → enters the completion set.
-          final idx = regularIndexByPin[pinId];
+          final idx = indexByKey[pinId];
           if (idx != null) sessionCompleted.add(idx);
 
           stats.downloaded++;
@@ -720,7 +776,7 @@ class DownloadCoordinator {
         onSkipped: (pinId, reason) {
           hooks.skipped('Skipped $pinId: $reason');
           // D-04: explicit skip = complete → enters the completion set.
-          final idx = regularIndexByPin[pinId];
+          final idx = indexByKey[pinId];
           if (idx != null) sessionCompleted.add(idx);
 
           stats.skipped++;
@@ -758,7 +814,8 @@ class DownloadCoordinator {
       );
     }
 
-    // Process HLS items — strategy depends on build flavor.
+    // Process HLS items — strategy depends on build flavor. HLS items are
+    // always video items (one per pin), so `item.key == item.pinId` here.
     if (BuildConfig.enableFfmpeg && hlsService != null && hlsConverter != null) {
       // ── FFmpeg build: HLS parsing + FFmpeg conversion ──
       for (var i = 0; i < hlsItems.length; i++) {
@@ -767,7 +824,7 @@ class DownloadCoordinator {
         final item = hlsItems[i];
         final outputFilename = FormatUtils.pinFilename(
             pinId: item.pinId, role: 'video', url: item.url); // HLS -> MP4
-        pinUrlMap[item.pinId] = (item.url, outputFilename);
+        pinUrlMap[item.key] = (item.url, outputFilename);
 
         hooks.downloading('HLS video: Fetching playlist for ${item.pinId}...');
 
@@ -778,7 +835,7 @@ class DownloadCoordinator {
                 outputFilename, videosFolder);
             if (exists) {
               hooks.skipped('Skipped ${item.pinId}: File exists');
-              sessionCompleted.add(startIndex + regularItems.length + i);
+              sessionCompleted.add(indexByKey[item.key]!);
 
               stats.skipped++;
               stats.currentIndex++;
@@ -827,7 +884,7 @@ class DownloadCoordinator {
 
           if (savedPath != null) {
             hooks.saved('Saved: $outputFilename');
-            sessionCompleted.add(startIndex + regularItems.length + i);
+            sessionCompleted.add(indexByKey[item.key]!);
 
             stats.downloaded++;
             stats.currentIndex++;
@@ -869,7 +926,7 @@ class DownloadCoordinator {
         final item = hlsItems[i];
         hooks.skipped(
             'Skipped ${item.pinId}: HLS video — requires FFmpeg build');
-        sessionCompleted.add(startIndex + regularItems.length + i);
+        sessionCompleted.add(indexByKey[item.key]!);
         stats.skipped++;
         stats.currentIndex++;
         onStats(skippedDelta: 1, indexDelta: 1);
@@ -909,6 +966,11 @@ class DownloadCoordinator {
                 mediaType: mediaType.name,
                 nextBookmark: nextBookmark,
                 bookmarkContext: bookmarkContext,
+                // Feed/Board carousel migration: these indices are absolute
+                // over the EXPANDED plan (one item per carousel slide) — the
+                // marker is what stops a later continue from reading them as
+                // pre-migration pin-level indices.
+                itemPlan: MetadataReader.feedItemPlanExpanded,
               ),
             )
           : null,

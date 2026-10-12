@@ -21,11 +21,24 @@ class BoardTypeResume {
   final int skipDownloaded;
   final int failedDownloaded;
 
+  /// Feed/Board carousel migration: how many ITEMS the run planned when this
+  /// record was written (one per pin, plus one per carousel slide). `null` for
+  /// records written before the migration — the completeness check then falls
+  /// back to the legacy pin-count comparison.
+  final int? items;
+
+  /// Coordinate space marker, mirroring the metadata `item_plan` field
+  /// ([MetadataReader.feedItemPlanExpanded] once carousel slides count as
+  /// items). `null` = pre-migration pin-level indices.
+  final String? plan;
+
   const BoardTypeResume({
     required this.completedIndices,
     this.successDownloaded = 0,
     this.skipDownloaded = 0,
     this.failedDownloaded = 0,
+    this.items,
+    this.plan,
   });
 
   /// Continue-mode start index for this board+type (contract: same math as
@@ -38,19 +51,21 @@ class BoardTypeResume {
   Set<int> get reofferIndices {
     final mc = maxContiguous(completedIndices);
     return completedIndices.where((i) => i > mc).toSet();
-  }
-
-  Map<String, dynamic> toJson() => {
+  }  Map<String, dynamic> toJson() => {
         'completed_indices': completedIndices.toList()..sort(),
         'success_downloaded': successDownloaded,
         'skip_downloaded': skipDownloaded,
         'failed_downloaded': failedDownloaded,
+        if (items != null) 'items': items,
+        if (plan != null) 'plan': plan,
       };
 
   static BoardTypeResume? tryParse(Object? json) {
     if (json is! Map<String, dynamic>) return null;
     final raw = json['completed_indices'];
     final indices = raw is List<dynamic> ? raw.whereType<int>().toSet() : <int>{};
+    final rawItems = json['items'];
+    final rawPlan = json['plan'];
     return BoardTypeResume(
       completedIndices: indices,
       successDownloaded: json['success_downloaded'] is int
@@ -58,8 +73,11 @@ class BoardTypeResume {
           : 0,
       skipDownloaded:
           json['skip_downloaded'] is int ? json['skip_downloaded'] as int : 0,
-      failedDownloaded:
-          json['failed_downloaded'] is int ? json['failed_downloaded'] as int : 0,
+      failedDownloaded: json['failed_downloaded'] is int
+          ? json['failed_downloaded'] as int
+          : 0,
+      items: rawItems is int && rawItems >= 0 ? rawItems : null,
+      plan: rawPlan is String && rawPlan.isNotEmpty ? rawPlan : null,
     );
   }
 

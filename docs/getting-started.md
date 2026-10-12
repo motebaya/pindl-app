@@ -2,7 +2,7 @@
 
 PinDL is a personal-use Android app for downloading publicly accessible Pinterest images and videos. It is distributed through this repository's GitHub Releases — there is no Play Store build.
 
-_Applies to PinDL 3.1.0._
+_Applies to PinDL 3.1.1._
 
 ## Requirements
 

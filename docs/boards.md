@@ -1,6 +1,6 @@
 # Boards
 
-_Applies to PinDL 3.1.0._
+_Applies to PinDL 3.1.1._
 
 Boards mode downloads a Pinterest account's public boards — whole boards or selected sections.
 

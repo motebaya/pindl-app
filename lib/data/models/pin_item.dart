@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import '../../core/media/carousel_slots.dart';
 import '../../core/media/video_selection.dart';
 import 'video_url.dart';
 
@@ -13,6 +14,13 @@ class PinItem extends Equatable {
   final bool hasImage;
   final bool hasVideo;
 
+  /// Carousel slide image URLs in display order (Feed/Board carousel
+  /// migration). Empty for a plain pin AND for a one-slide carousel — callers
+  /// must treat `length <= 1` as "single item" so non-carousel behavior stays
+  /// byte-identical. Sourced from the feed/board row's `carousel_data` block
+  /// via [carouselSlotUrlsFromRow] (live-verified shape; see that module).
+  final List<String> imageSlots;
+
   const PinItem({
     required this.pinId,
     required this.title,
@@ -22,6 +30,7 @@ class PinItem extends Equatable {
     this.uploadDate,
     this.hasImage = false,
     this.hasVideo = false,
+    this.imageSlots = const [],
   });
 
   /// Create from Pinterest API response for user pins
@@ -109,6 +118,10 @@ class PinItem extends Equatable {
       uploadDate: uploadDate,
       hasImage: hasImage,
       hasVideo: hasVideo,
+      // Feed/Board carousel migration: the row carries every slide (live
+      // evidence in `core/media/carousel_slots.dart`); absent/one-slot rows
+      // stay a single item.
+      imageSlots: carouselSlotUrlsFromRow(json),
     );
   }
   
@@ -200,6 +213,10 @@ class PinItem extends Equatable {
       'uploadDate': uploadDate?.toIso8601String(),
       'hasImage': hasImage,
       'hasVideo': hasVideo,
+      // v2-additive: older readers ignore the key; a resumed job whose pins
+      // were persisted by 3.1.0/3.1.1 simply has no slots (see the resume
+      // migration in `core/persistence/feed_plan_migration.dart`).
+      if (imageSlots.isNotEmpty) 'imageSlots': imageSlots,
     };
   }
 
@@ -222,6 +239,11 @@ class PinItem extends Equatable {
           : null,
       hasImage: json['hasImage'] as bool? ?? false,
       hasVideo: json['hasVideo'] as bool? ?? false,
+      imageSlots: (json['imageSlots'] as List<dynamic>?)
+              ?.whereType<String>()
+              .where((u) => u.isNotEmpty)
+              .toList() ??
+          const [],
     );
   }
 
@@ -234,6 +256,7 @@ class PinItem extends Equatable {
     DateTime? uploadDate,
     bool? hasImage,
     bool? hasVideo,
+    List<String>? imageSlots,
   }) {
     return PinItem(
       pinId: pinId ?? this.pinId,
@@ -244,12 +267,14 @@ class PinItem extends Equatable {
       uploadDate: uploadDate ?? this.uploadDate,
       hasImage: hasImage ?? this.hasImage,
       hasVideo: hasVideo ?? this.hasVideo,
+      imageSlots: imageSlots ?? this.imageSlots,
     );
   }
 
   @override
-  List<Object?> get props => [pinId, title, imageUrl, videoUrl, thumbnail, uploadDate, hasImage, hasVideo];
+  List<Object?> get props => [pinId, title, imageUrl, videoUrl, thumbnail, uploadDate, hasImage, hasVideo, imageSlots];
 
   @override
-  String toString() => 'PinItem($pinId, "$title", image: $hasImage, video: $hasVideo)';
+  String toString() => 'PinItem($pinId, "$title", image: $hasImage, video: $hasVideo, '
+      'slots: ${imageSlots.length})';
 }

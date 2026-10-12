@@ -1,6 +1,6 @@
 # Usage
 
-_Applies to PinDL 3.1.0._
+_Applies to PinDL 3.1.1._
 
 ## What you can paste
 

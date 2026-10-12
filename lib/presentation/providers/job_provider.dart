@@ -24,6 +24,7 @@ import '../../data/services/log_service.dart';
 import '../../data/controllers/board_controller.dart';
 import '../../data/controllers/download_coordinator.dart';
 import '../../data/controllers/extraction_controller.dart';
+import '../../data/controllers/feed_plan_migration.dart';
 import '../../data/services/pinterest_extractor_service.dart';
 import '../../data/services/task_state_persistence.dart';
 import '../../data/models/background_task_state.dart';
@@ -73,6 +74,12 @@ class AppJobState {
   /// semantics — documented degradation, D-04 contract).
   final Set<int> previousCompletedIndices;
 
+  /// Feed/Board carousel migration: the coordinate space of
+  /// [previousCompletedIndices] as recorded in the metadata file
+  /// (`item_plan`). Null/absent = pre-migration pin-level indices; see
+  /// `data/controllers/feed_plan_migration.dart`. Never used for v1 files.
+  final String? loadedItemPlan;
+
   /// Phase 07 (07.5, D-34): capped-extraction continuation. Non-null only
   /// when the last feed extraction hit the page cap with more pages pending;
   /// travels with its full request context or not at all.
@@ -119,6 +126,7 @@ class AppJobState {
     this.imagesFullyDownloaded = false,
     this.videosFullyDownloaded = false,
     this.previousCompletedIndices = const {},
+    this.loadedItemPlan,
     this.nextBookmark,
     this.bookmarkContext,
     this.discoveredBoards = const [],
@@ -208,6 +216,7 @@ class AppJobState {
     bool? imagesFullyDownloaded,
     bool? videosFullyDownloaded,
     Set<int>? previousCompletedIndices,
+    String? loadedItemPlan,
     String? nextBookmark,
     BookmarkContext? bookmarkContext,
     List<Board>? discoveredBoards,
@@ -239,6 +248,7 @@ class AppJobState {
       imagesFullyDownloaded: imagesFullyDownloaded ?? this.imagesFullyDownloaded,
       videosFullyDownloaded: videosFullyDownloaded ?? this.videosFullyDownloaded,
       previousCompletedIndices: previousCompletedIndices ?? this.previousCompletedIndices,
+      loadedItemPlan: loadedItemPlan ?? this.loadedItemPlan,
       nextBookmark: nextBookmark ?? this.nextBookmark,
       bookmarkContext: bookmarkContext ?? this.bookmarkContext,
       discoveredBoards: discoveredBoards ?? this.discoveredBoards,
@@ -878,9 +888,14 @@ class JobNotifier extends StateNotifier<AppJobState> {
           // front (re-offered only when failed items exist — D-04 truth
           // table applies unchanged at the index level below).
           final resume = resumeByBoard?[choice.boardId];
+          // Feed/Board carousel migration: a record written by this version
+          // carries the ITEM count it planned, so "fully complete" is compared
+          // against the real work items (a carousel makes items > pins).
+          // Legacy records (no `items`) keep the historical pin-count rule.
+          final expectedItems = resume?.items ?? choice.boardPinCount;
           if (resume != null &&
               choice.boardPinCount > 0 &&
-              resume.completedIndices.length >= choice.boardPinCount &&
+              resume.completedIndices.length >= expectedItems &&
               resume.failedDownloaded == 0) {
             _logService.queue(
                 'Board ${choice.name}: already complete for this type — skipping');
@@ -952,6 +967,15 @@ class JobNotifier extends StateNotifier<AppJobState> {
 
         // ---- 10.3: persist per-board+type resume block ----
         if (saveMetadata && runResult.sessionCompleted.isNotEmpty) {
+          // Feed/Board carousel migration: record the ITEM count this run
+          // planned (also ships the folder-independent plan shape here — the
+          // coordinator rebuilt exactly this plan internally).
+          final plannedItemCount = DownloadCoordinator.planFeedItems(
+            pins: pins,
+            mediaType: mediaType,
+            imagesFolder: '${run.baseFolder}/Images',
+            videosFolder: '${run.baseFolder}/Videos',
+          ).length;
           await _upsertBoardResume(
             username: username,
             boardId: choice.boardId,
@@ -961,6 +985,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
             successDownloaded: runResult.stats.downloaded,
             skipDownloaded: runResult.stats.skipped,
             failedDownloaded: runResult.stats.failed,
+            plannedItems: plannedItemCount,
           );
         }
       }
@@ -1021,6 +1046,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
     required int successDownloaded,
     required int skipDownloaded,
     required int failedDownloaded,
+    required int plannedItems,
   }) async {
     try {
       final baseFolder = 'PinDL/@$username';
@@ -1061,6 +1087,10 @@ class JobNotifier extends StateNotifier<AppJobState> {
             skipDownloaded: (prevType?.skipDownloaded ?? 0) + skipDownloaded,
             failedDownloaded:
                 (prevType?.failedDownloaded ?? 0) + failedDownloaded,
+            // Feed/Board carousel migration: the item count this run planned
+            // (>= pin count once carousels expand) + the coordinate marker.
+            items: plannedItems,
+            plan: MetadataReader.feedItemPlanExpanded,
           ),
         },
       );
@@ -1190,6 +1220,10 @@ class JobNotifier extends StateNotifier<AppJobState> {
         imagesFullyDownloaded: imagesAlreadyDone,
         videosFullyDownloaded: videosAlreadyDone,
         previousCompletedIndices: completedIndices,
+        // Feed/Board carousel migration: remember which coordinate space the
+        // stored indices live in. It is re-projected onto the run's item plan
+        // in startDownload (see feed_plan_migration.dart).
+        loadedItemPlan: read.itemPlan,
       );
       
       final remaining = previousMediaType == 'video'
@@ -1238,8 +1272,22 @@ class JobNotifier extends StateNotifier<AppJobState> {
 
     _logService.queue('Starting download queue');
 
+    // Item plan for the feed/board path — one item per pin, plus one item per
+    // carousel slide (Feed/Board carousel migration). Built BEFORE the plan is
+    // consumed so the persisted progress denominator matches the work items.
+    final username0 = state.author?.username ?? 'unknown';
+    final plannedItems = state.singlePinResult != null
+        ? const <PlannedDownload>[]
+        : DownloadCoordinator.planFeedItems(
+            pins: state.pins,
+            mediaType: mediaType,
+            imagesFolder: 'PinDL/@$username0/Images',
+            videosFolder: 'PinDL/@$username0/Videos',
+          );
+
     // Persist download state for background recovery.
-    // 3.1.1: a carousel is one item per slide (matching what is downloaded).
+    // 3.1.1/3.1.2: a carousel is one item per slide (matching what is
+    // downloaded) — pinned for the single-pin path too.
     final single = state.singlePinResult;
     final singleImageItems = single == null || !downloadImage || !single.hasImage
         ? 0
@@ -1247,7 +1295,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
     final totalToDownload = single != null
         ? singleImageItems +
             (downloadVideo && single.hasVideoContent ? 1 : 0)
-        : state.pins.length;
+        : plannedItems.length;
     _persistDownloadState(mediaType, overwrite, saveMetadata, totalToDownload);
 
     // Notify foreground service manager that task started
@@ -1266,6 +1314,29 @@ class JobNotifier extends StateNotifier<AppJobState> {
         return;
       }
 
+      // Feed/Board carousel migration (OQ-13): the stored completion record
+      // may predate carousel expansion (one item per pin). Re-project it onto
+      // THIS run's item plan, so a legacy record can never mark a slide
+      // complete that was never downloaded, and a completed prefix stays
+      // skipped (see data/controllers/feed_plan_migration.dart).
+      final storedMapping = mapStoredCompletionToPlan(
+        plannedItems: plannedItems,
+        pins: state.pins,
+        storedCompleted: state.previousCompletedIndices,
+        storedItemPlan: state.loadedItemPlan,
+        mediaType: mediaType,
+      );
+      if (storedMapping.translated) {
+        _logService.parse(
+            'Carousel migration: re-projected ${storedMapping.completedIndices.length} '
+            'completed pin(s) onto the expanded item plan '
+            '(${storedMapping.dropped} re-offered)');
+      }
+      final continueCompleted = storedMapping.completedIndices;
+      final continueLastIndex = storedMapping.translated
+          ? maxContiguous(continueCompleted)
+          : state.lastIndexDownloaded;
+
       // Handle user pins via the download coordinator (queue + HLS).
       final result = await _download.runFeedDownload(
         pins: state.pins,
@@ -1275,9 +1346,9 @@ class JobNotifier extends StateNotifier<AppJobState> {
         overwrite: overwrite,
         saveMetadata: saveMetadata,
         isContinueMode: state.isContinueMode,
-        lastIndexDownloaded: state.lastIndexDownloaded,
+        lastIndexDownloaded: continueLastIndex,
         previousMediaType: state.previousMediaType,
-        previousCompletedIndices: state.previousCompletedIndices,
+        previousCompletedIndices: continueCompleted,
         totalImages: state.totalImages,
         totalVideos: state.totalVideos,
         previousDownloaded: state.previousDownloaded,

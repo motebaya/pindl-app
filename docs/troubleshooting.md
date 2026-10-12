@@ -1,6 +1,6 @@
 # Troubleshooting
 
-_Applies to PinDL 3.1.0._
+_Applies to PinDL 3.1.1._
 
 ## Install problems
 
@@ -50,7 +50,7 @@ Conversion output is validated before being saved, so a broken conversion never 
 Byte-range resume only continues when the server confirms the exact same file; if anything mismatches, the download restarts cleanly by design rather than saving a corrupt file. Very old or changed files are the usual cause.
 
 **Wrong or unexpected file for a pin**
-Since 3.1.0 the app prefers the best available rendition, so a pin can yield a different (better) file than older releases produced.
+Since 3.1.1 the app prefers the best available rendition, so a pin can yield a different (better) file than older releases produced.
 
 ## Boards
 

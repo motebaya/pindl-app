@@ -1,6 +1,6 @@
 # Architecture (contributor overview)
 
-PinDL is a Flutter Android application with a layered structure: UI on top, orchestration below it, and extraction/download/persistence services at the bottom. This page describes the codebase as it exists in 3.1.0.
+PinDL is a Flutter Android application with a layered structure: UI on top, orchestration below it, and extraction/download/persistence services at the bottom. This page describes the codebase as it exists in 3.1.1.
 
 ## Layout
 

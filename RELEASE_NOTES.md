@@ -1,68 +1,76 @@
 # Release Notes
 
-## 3.1.0
+## 3.1.1
+
+Fixes a set of defects reported from a real-device QA pass, and finishes carousel support for
+profile and board downloads. It also carries the feature work that had not been published before
+(boards, byte-level resume, better rendition picks), so everything below ships together in this
+release.
 
 ### TL;DR (Recommended)
 
-- **Recommended:** Download **PinDL-lite-arm64-v8a-v3.1.0-b7.apk**  
+- **Recommended:** Download **PinDL-lite-arm64-v8a-v3.1.1-b8.apk**
   Works on almost all modern Android phones.
-- If you need advanced HLS processing, choose the **ffmpeg** variant.
+- If you need HLS video conversion, choose the **ffmpeg** variant.
 
 ### App variant
 
-- **Lite** -> Smaller size, faster startup, recommended for most users (universal ≈ 59 MB).
-- **FFmpeg** -> Larger size, includes advanced video processing (universal ≈ 136 MB).
+- **Lite** → Smaller size, faster startup, recommended for most users (universal ≈ 59 MB).
+  HLS-only videos are skipped with a clear reason instead of being saved.
+- **FFmpeg** → Larger size, includes HLS → MP4 conversion (universal ≈ 136 MB).
 
 ### CPU architecture
 
-- **arm64-v8a** -> Most Android phones (recommended)
-- **armeabi-v7a** -> Older phones (32-bit)
-- **x86_64** -> Emulator only
-- **universal** -> Works everywhere, but larger size
+- **arm64-v8a** → Most Android phones (recommended)
+- **armeabi-v7a** → Older phones (32-bit)
+- **x86_64** → Emulator only
+- **universal** → Works everywhere, but larger size
 
 Not sure? Choose **arm64-v8a**.
 
-### Highlights
+### Fixed in 3.1.1
 
-- **Boards are here.** Paste a Pinterest username, pick boards (or individual sections), and
-  download whole boards in one go — files land in per-board folders under `Download/PinDL/@<username>/Boards/`.
-- **Better video quality.** For pins offering multiple renditions, PinDL now picks the best
-  available MP4 and prefers the newer HLS master stream — the same pin may yield a
-  higher-quality file than before.
-- **Carousel pins fully supported.** Multi-image pins now download one file per image
-  (`<pinId>_image_1..n`) instead of only the first.
-- **Large downloads resume at the byte level.** Interrupted big downloads continue where
-  they stopped instead of starting over.
+- **Videos from single pins now download as videos.** An HLS video pin (`.m3u8`) used to be saved
+  as a `<pinId>_video.mp4` file containing playlist text (~920 B, unplayable) with no error shown.
+  Progressive MP4 is now fetched directly, and HLS is parsed and converted to MP4 before saving
+  (ffmpeg variant). On the lite variant an HLS video is an explicit, honest skip.
+- **“short body” retry loop is gone.** A download could fail forever when the CDN under-declared a
+  body’s length; the declared length is now advisory and a longer body is accepted.
+- **Manifests can no longer be imported as media.** Playlists and other plain-text responses are
+  rejected for both images and videos.
+- **“No data on pin page” for public pins.** Pin-page extraction now retries across the known
+  hosts, bounded, and only reports the failure after the whole plan is exhausted.
+- **Video pins pick the best rendition**, including when the pin page offers several records where
+  only some carry a direct MP4.
+- **Images download at full resolution.** Renditions are ranked by resolution instead of server
+  key order, and a thumbnail-sized URL is rewritten to the full-resolution `/originals/` image.
+- **Carousel (multi-image) pins download every slide — in your profile feed and in boards too.**
+  Previously only the single-pin view expanded a carousel; a carousel pin reached through a
+  username or board feed saved just its first image. Each slide is now downloaded as its own file
+  (`<pinId>_image_<n>.<ext>`), progress counts slides individually, and an interrupted carousel
+  resumes without re-downloading finished slides or skipping missing ones.
+- **The preview’s speaker badge is a real mute/unmute toggle** (it was a static icon).
+- **The console is selectable and has “copy all logs”**, and it opens with a line stating whether
+  this build can convert HLS — so a wrong APK variant is visible instead of silent.
 
-### What's New
+### Also in this release
 
-- Boards & sections mode: live board discovery, per-board Whole / Sections / Skip choices,
-  and sequential downloads with aggregated progress.
-- Better rendition picks: best available MP4 (720P → 960P → 480P → 360P) instead of always
-  preferring 720P, and the newer HLS master stream (V_HLSV4) preferred over the older mobile
-  HLS stream when only HLS is offered.
-- Feed quality: duplicate pins across pages are removed, and capped feeds show a
-  "Fetch more" button instead of silently stopping.
-- Downloads are verified before saving (file signature + size checks), so corrupted or
-  unexpected responses are rejected instead of saved as broken files.
-- Clearer errors for missing or changed pins, and switching between profiles no longer
-  reuses the previous profile's cached pages.
-- Interrupted download sessions resume more accurately: completed items are never
-  re-downloaded, and failed or cancelled ones are re-offered.
-- Progress notifications update at a steady rate instead of flooding the notification shade.
+- **Boards & sections mode:** live board discovery, per-board Whole / Sections / Skip choices, and
+  sequential downloads with aggregated progress, into
+  `Download/PinDL/@<username>/Boards/<board>-<id>/`.
+- **Better rendition picks** for videos (best available MP4, newer HLS master stream preferred when
+  only HLS is offered).
+- **Feed quality:** duplicate pins across pages are removed, and capped feeds offer
+  “Fetch more” instead of silently stopping.
+- **Downloads are verified before saving** (file signature + size checks), so corrupted or
+  unexpected responses are rejected rather than written as broken files.
+- **Byte-level resume** for large downloads: an interrupted transfer continues from where it
+  stopped instead of starting over.
+- **Clearer errors** for missing or changed pins, and per-profile session isolation.
 
-### Reliability
+### Known limitations
 
-- Large media downloads resume at the byte level after interruptions (HTTP Range requests,
-  verified against the Pinterest media CDN). If the server response is inconsistent,
-  the download restarts cleanly instead of producing a corrupt file.
-- On the lite build, HLS-only videos are skipped up front with a clear reason
-  ("requires FFmpeg build") instead of failing mid-download.
-
-### Removed / Impact
-
-- **Behavioral change:** the same pin can now produce a different (better) file than in
-  2.1.x, because better renditions are preferred.
-- **Behavioral change:** Android 13+ may request notification permission for background
-  task notifications.
-- **Compatibility:** minimum supported Android version remains API 24 (Android 7.0+).
+- **Lite variant does not convert HLS:** HLS-only videos are skipped with the reason
+  “requires FFmpeg build”.
+- **Minimum Android version: API 24 (Android 7.0+).**
+- **Sideload distribution only** — no Play Store build is produced by this repository.

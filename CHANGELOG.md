@@ -38,6 +38,11 @@ this entry records the fixes.
 - **Multi-image (carousel) pins offered and downloaded only one image**: the item count and preview
   now show every slide, and the download writes one indexed file per slide
   (`<pinId>_image_<n>.<ext>`).
+- **Carousel pins reached through a username/board feed downloaded only the first image** (OQ-13):
+  profile-feed and board runs now expand a carousel pin into one item per slide too, using the same
+  slot extraction the single-pin path uses. Completion is tracked per item, so a partially
+  downloaded carousel is never recorded as complete, and failed/cancelled slides are re-offered on
+  continue.
 - **Video preview could not be unmuted**: the speaker badge on the preview was a static icon with no
   gesture. It is now a real toggle that unmutes/mutes the playing preview.
 
@@ -47,6 +52,14 @@ this entry records the fixes.
   verbatim.
 - **Console capability banner**: the first log line states whether this build can convert HLS
   (`ffmpeg` build) or not (`lite` build).
+
+### Changed
+
+- **Resume metadata now records the item-plan coordinate space** (`item_plan` = `pin-expanded`).
+  Carousel expansion changes the item list a completion set refers to, so a stored record written
+  by 3.1.0/3.1.1 (one item per pin) is re-projected onto the expanded plan instead of being read as
+  if it already counted slides. A record that cannot be proven to map is re-offered rather than
+  skipped. `board_resume` entries carry the planned item count for the same reason.
 
 ## [2.1.0] - 2026-02-12
 
