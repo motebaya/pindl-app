@@ -33,6 +33,9 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Build-script output (release APKs + build.md report, local-only)
+/dist/
+
 # Symbolication related
 app.*.symbols
 

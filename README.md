@@ -7,15 +7,18 @@
 <small>A personal-use utility app for downloading publicly accessible Pinterest content.</small>
 
 [![dart](https://img.shields.io/badge/Dart-3.10-0175C2?style=flat&logo=dart&logoColor=white)](https://dart.dev/)
-[![flutter](https://img.shields.io/badge/Flutter-3.38-02569B?style=flat&logo=flutter&logoColor=white)](https://flutter.dev/)
+[![flutter](https://img.shields.io/badge/Flutter-3.47-02569B?style=flat&logo=flutter&logoColor=white)](https://flutter.dev/)
 [![kotlin](https://img.shields.io/badge/Kotlin-2.0-7F52FF?style=flat&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Android](https://img.shields.io/badge/Android-24%2B-3DDC84?style=flat&logo=android&logoColor=white)](https://developer.android.com)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![API](https://img.shields.io/badge/API-24%2B-brightgreen.svg?style=flat)](https://android-arsenal.com/api?level=24)
 
+<br>
+<small>Current release: <b>3.1.1</b> · <a href="RELEASE_NOTES.md">release notes</a> · <a href="CHANGELOG.md">changelog</a></small>
+
 </div>
 
-PinDL is a Flutter-based Android application that allows users to download publicly accessible images and videos from Pinterest. It supports downloading content from: **Individual Pins** (`URL` or `PIN ID`) and **User Profiles** (Bulk download from any public `Pinterest username`). The app features a beautiful Neumorphism (Soft UI) design with both light and dark themes.
+PinDL is a Flutter-based Android application that allows users to download publicly accessible images and videos from Pinterest. It supports downloading content from: **Individual Pins** (`URL` or `PIN ID`), **User Profiles** (Bulk download from any public `Pinterest username`), and **Boards** (whole board or selected sections). Multi-image (carousel) pins download every slide. The app features a beautiful Neumorphism (Soft UI) design with both light and dark themes.
 
 - See also the CLI version of the same tool built using Node.JS: [motebaya/pinterest-js](https://github.com/motebaya/pinterest-js)
 
@@ -36,13 +39,20 @@ flowchart TD
     D -->|Username| E[Fetch User Config]
     D -->|Pin URL/ID| F[Fetch Pin Data]
 
-    E --> G[Get User Pins with Pagination]
+    E --> E1{Feed or Boards?}
+    E1 -->|Feed| G[Get User Pins with Pagination]
+    E1 -->|Boards| E2["Find Boards: Whole / Sections / Skip"]
+    E2 --> E3[Fetch Board Pins sequentially]
+    E3 --> H
     G --> H[Parse Media URLs]
 
     F --> I[Extract Media Info]
     I --> H
 
-    H --> J{Media Type Filter}
+    H --> H1{Carousel pin?}
+    H1 -->|Yes| H2["Expand: one item per slide"]
+    H1 -->|No| J{Media Type Filter}
+    H2 --> J
     J -->|Images| K[Queue Image Downloads]
     J -->|Videos| L{Video Format?}
 
@@ -54,14 +64,10 @@ flowchart TD
     P --> Q["FFmpeg Demux/Remux (stream-copy)"]
     Q --> R[Output MP4]
 
-    N -->|Lite Build| S[Re-fetch Pin as Single URL]
-    S --> T{Direct MP4 Found?}
-    T -->|Yes| U[Download Direct MP4]
-    T -->|No| V[Skip / Error]
+    N -->|Lite Build| V["Skip with reason: HLS video — requires FFmpeg build"]
 
     K --> W[Download via Dio]
     M --> W
-    U --> W
 
     W --> X{App in Background?}
     X -->|Yes| X1[Foreground Service Active]
@@ -100,13 +106,16 @@ flowchart TD
 | Board downloads with sections (Whole / Sections / Skip) | ✅ |
 | Short URL resolution (pin.it)        | ✅     |
 | Image download support               | ✅     |
+| Multi-image (carousel) pins — one indexed file per slide (`_image_1..n`) | ✅ |
 | Video download support (720p)        | ✅     |
 | HLS video conversion (FFmpeg build)  | ✅     |
+| Best-quality rendition selection (direct MP4 over HLS, images upgraded to `/originals/`) | ✅ |
 | Lite build: direct-MP4 videos; HLS-only videos require the FFmpeg build | ✅ |
 | Batch/bulk downloads                 | ✅     |
 | Background downloads (foreground service) | ✅ |
 | Progress notifications with bar      | ✅     |
 | Completion notifications with sound  | ✅     |
+| In-app console: selectable logs, copy-all, HLS capability banner | ✅ |
 | Resume interrupted downloads         | ✅     |
 | Cross-session progress accumulation  | ✅     |
 | Per-media-type continue mode         | ✅     |
@@ -137,32 +146,42 @@ flowchart TD
 
 ```
 lib/
-├── core/
-│   ├── constants/          # App constants and Pinterest API config
-│   ├── exceptions/         # Custom exception classes
-│   ├── theme/              # App themes and Neumorphism styles
-│   └── utils/              # Utility functions and validators
+├── core/                  # Pure Dart: no widgets, no platform channels
+│   ├── config/            # Build-time feature flags (ENABLE_FFMPEG)
+│   ├── constants/         # App constants and Pinterest API config
+│   ├── exceptions/        # Custom exception classes
+│   ├── media/             # Rendition selection + carousel slots
+│   ├── network/           # Host allowlist, retry/backoff, byte-range resume
+│   ├── persistence/       # Metadata schema v2, task/board resume
+│   ├── theme/             # App themes and Neumorphism styles
+│   ├── utils/             # Filename/folder helpers, URL validation
+│   └── validation/        # Byte-signature content validation
 ├── data/
-│   ├── models/             # Data models (Pin, Author, BackgroundTaskState, etc.)
-│   ├── parsers/            # Pinterest HTML/JSON parsers
-│   └── services/           # API, download, notification, and persistence services
+│   ├── controllers/       # ExtractionController, BoardController, DownloadCoordinator
+│   ├── models/            # Data models (Pin, Author, Board, BackgroundTaskState, etc.)
+│   ├── parsers/           # Pinterest HTML/JSON parsers
+│   ├── pinterest/         # Request construction (resource registry)
+│   └── services/          # API, download, HLS, notification, and history services
 ├── presentation/
-│   ├── pages/              # UI screens (Home, History, About, etc.)
-│   ├── providers/          # Riverpod state management + foreground service manager
-│   └── widgets/            # Reusable Soft UI widgets
-└── main.dart               # App entry point (Hive init)
+│   ├── pages/             # UI screens (Home, Downloads, History, About, etc.)
+│   ├── providers/         # Riverpod state management + foreground service manager
+│   ├── utils/             # Motion + user-facing error message mapping
+│   └── widgets/           # Reusable Soft UI widgets (boards picker, console)
+└── main.dart              # App entry point (Hive init)
 
 android/
 ├── app/
 │   ├── src/main/
-│   │   ├── kotlin/         # Kotlin code (MainActivity, MediaChannelHandler)
-│   │   └── res/drawable/   # Notification icons (ic_download_notification)
-│   └── build.gradle.kts    # Android build configuration (core library desugaring)
-└── key.properties          # Signing configuration (not in git)
+│   │   ├── kotlin/        # Kotlin code (MainActivity, MediaChannelHandler, BootPluginAssert)
+│   │   └── res/drawable/  # Notification icons (ic_download_notification)
+│   └── build.gradle.kts   # Android build configuration (flavors, core library desugaring)
+└── key.properties         # Signing configuration (not in git)
 ```
 
-> Business orchestration lives in `presentation/providers` (job/extraction/
-> download coordination).
+> Orchestration: `presentation/providers` owns the state machine (job/
+> extraction/download), and `data/controllers` holds the widget-free
+> controllers (extraction, boards, download planning) that keep the core
+> logic fixture-testable — see [Architecture](docs/architecture.md).
 
 ## Building
 
@@ -258,10 +277,24 @@ chmod +x build_prod.sh
 - `ffmpeg`: includes FFmpeg for HLS → MP4 conversion
 - `all`: Builds both flavors
 
-**Measured APK sizes** (on-disk decimal; release, minify+shrink,
-Flutter 3.47.5, 2026-10-01): lite universal **59.0 MB**, ffmpeg
-universal **136.0 MB**; per-ABI splits (2026-09-29 audit): lite arm64
-24.6 MB, ffmpeg arm64 43.9 MB.
+**Output:** the scripts copy the APKs from `build/app/outputs/flutter-apk/`
+into `dist/` and rename them to `PinDL-<flavor>-<abi>-v<version>-b<build>.apk`
+(e.g. `dist/PinDL-ffmpeg-arm64-v8a-v3.1.1-b8.apk`), then write
+`dist/build.md` — the build report with build-from OS, host, toolchain, git
+source, start/finish stamps in the build timezone (**Asia/Jakarta** by
+default; override with `PINDL_BUILD_TZ`), total build time, and a per-APK
+size + description table (sizes in on-disk decimal MB). A non-empty `dist/`
+asks **overwrite or cancel** before anything is built (answer
+non-interactively with `PINDL_DIST_ACTION=overwrite|cancel`). `dist/` is
+gitignored — local build artifacts only.
+
+**Measured APK sizes** (on-disk decimal MB = bytes / 1,000,000; release,
+minify+shrink, Flutter 3.47.5): current 3.1.1 builds — lite universal
+**59.7 MB** (59,671,734 B); ffmpeg per-ABI splits arm64-v8a **42.9 MB**
+(42,946,177 B), armeabi-v7a **58.0 MB** (57,954,427 B), x86_64 **46.0 MB**
+(45,958,629 B). Earlier audit baselines (2026-09-29 / 2026-10-01): lite
+universal 59.0 MB, ffmpeg universal 136.0 MB, lite arm64 24.6 MB, ffmpeg
+arm64 43.9 MB. Every script build re-measures its own APKs in `dist/build.md`.
 
 **Split ABI Benefits:**
 - Reduces APK size by ~40-60% per architecture
@@ -316,11 +349,16 @@ Downloaded files are saved to:
 Downloads/
 └── PinDL/
     ├── @username/
-    │   ├── Images/         # Downloaded images
-    │   ├── Videos/         # Downloaded videos
-    │   └── <userId>.json   # User metadata with resume stats (schema v2)
+    │   ├── Images/                  # <pinId>_image.jpg (carousel: _image_1..n)
+    │   ├── Videos/                  # <pinId>_video.mp4
+    │   ├── <pinId>_thumbnail.jpg    # Video-poster thumbnails
+    │   ├── Boards/
+    │   │   └── <slug>-<boardId>/    # Per-board output (id suffix keeps folders unique)
+    │   │       ├── Images/
+    │   │       └── Videos/
+    │   └── <userId>.json            # User metadata with resume stats (schema v2)
     └── metadata/
-        └── <pinId>.json    # Single pin metadata
+        └── <pinId>.json             # Single pin metadata
 ```
 
 ### Resume semantics (metadata schema v2)
@@ -339,9 +377,13 @@ completed per the truth table below:
 `last_index_downloaded` = `maxContiguous(completed_indices)` — every item at
 or before that index is definitively done; continue starts just after it and
 re-offers holes. Older v1 files (no `schema` key) keep working with simple
-counter semantics; corrupt or unreadable files are never partially applied —
-continue treats them as no resume data. Files written by a newer app version
-show an upgrade prompt instead of misreading.
+counter semantics; corrupt or unreadable files are never partially applied — continue
+treats them as no resume data. Files written by a newer app version
+show an upgrade prompt instead of misreading. Since the carousel
+expansion, records also carry an `item_plan` marker (`pin-expanded`): a
+completion list written before slides counted as items is re-projected onto
+the expanded plan, and anything that cannot be proven to map is re-offered
+rather than skipped.
 
 ## Reliability & Limitations
 
@@ -354,6 +396,8 @@ show an upgrade prompt instead of misreading.
   re-offered via the resume prompt at next launch (Hive-backed).
 - Aggressive OEM battery managers can still kill long background sessions;
   the interrupted-task prompt at relaunch is the recovery path.
+- Boards mode processes boards one at a time (sequential) — there is no
+  parallel multi-board download.
 
 ## Legal Notice
 
