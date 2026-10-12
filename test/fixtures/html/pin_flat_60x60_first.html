@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<!-- Fixture (3.1.1): live single-pin record with NO imageLargeUrl whose flat
+     `images_*` maps are emitted in the order images_60x60 FIRST, images_orig
+     LAST (same image hash). The old flat-map resolver returned the first
+     insertion-ordered entry, so a 60x60 thumbnail (about 6 KB) was downloaded
+     as the pin's image while the original sat one key away.
+     CAUTION: this comment deliberately contains NO sample relay call text
+     (a commented example would itself match the scan regex and poison results). -->
+<html>
+<head><title>flat images, smallest first</title></head>
+<body>
+  <script>
+    window.__PWS_RELAY_REGISTER_COMPLETED_REQUEST__("pinterestapp:PinPage:closeup:3", {"data":{"pin_closeup":{"data":{"entityId":"222111000999888777666555444333222111000","title":"Fixture Smallest First Pin","images_60x60":{"url":"https://i.pinimg.com/60x60/aa/bb/cc/aabbcc11223344556677889900112233.jpg"},"images_136x136":{"url":"https://i.pinimg.com/136x136/aa/bb/cc/aabbcc11223344556677889900112233.jpg"},"images_236x":{"url":"https://i.pinimg.com/236x/aa/bb/cc/aabbcc11223344556677889900112233.jpg","width":236,"height":419},"images_474x":{"url":"https://i.pinimg.com/474x/aa/bb/cc/aabbcc11223344556677889900112233.jpg","width":474,"height":842},"images_736x":{"url":"https://i.pinimg.com/736x/aa/bb/cc/aabbcc11223344556677889900112233.jpg","width":736,"height":1308},"images_orig":{"url":"https://i.pinimg.com/originals/aa/bb/cc/aabbcc11223344556677889900112233.jpg","width":736,"height":1308},"pinner":{"username":"flatuser","entityId":"333444555666777888"},"closeupAttribution":{"fullName":"Flat Author"}}}}}); 
+  </script>
+</body>
+</html>

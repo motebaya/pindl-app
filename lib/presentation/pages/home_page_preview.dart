@@ -9,10 +9,18 @@ extension _HomePagePreview on _HomePageState {
     final thumbnail = singleResult.thumbnail as String?;
     final imageUrl = singleResult.imageUrl as String?;
     final videoUrl = singleResult.videoUrl as String?;
+    final slots = (singleResult.slots as List?) ?? const [];
     
     final showImage = settings.downloadImage;
     final showVideo = settings.downloadVideo && hasVideo;
     
+    // Carousel pins (3.1.1): a multi-image post previews EVERY slide, not just
+    // slide 0 — the old preview showed one image with no hint that 7 more were
+    // part of the pin (device report: "only 1 item is ready to download").
+    final carousel = showImage && slots.length > 1
+        ? _buildCarouselStrip(isDark, slots)
+        : null;
+
     // Determine what preview(s) to show
     if (showImage && showVideo) {
       // Show BOTH thumbnail AND video preview
@@ -62,6 +70,10 @@ extension _HomePagePreview on _HomePageState {
               ),
             ),
           ),
+          if (carousel != null) ...[
+            const SizedBox(height: 8),
+            carousel,
+          ],
           const SizedBox(height: 12),
           // Video preview
           Container(
@@ -97,9 +109,9 @@ extension _HomePagePreview on _HomePageState {
     } else if (showImage) {
       // Show image/thumbnail preview (for video URLs, this shows the thumbnail)
       final previewUrl = hasVideo ? (thumbnail ?? imageUrl) : imageUrl;
-      if (previewUrl == null) return const SizedBox.shrink();
+      if (previewUrl == null) return carousel ?? const SizedBox.shrink();
       
-      return Container(
+      final imageCard = Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
@@ -143,13 +155,117 @@ extension _HomePagePreview on _HomePageState {
           ),
         ),
       );
+
+      if (carousel == null) return imageCard;
+      return Column(
+        children: [
+          imageCard,
+          const SizedBox(height: 8),
+          carousel,
+        ],
+      );
     }
     
-    return const SizedBox.shrink();
+    return carousel ?? const SizedBox.shrink();
+  }
+
+  /// Horizontal strip of every carousel slide (3.1.1) — index badge + image,
+  /// so a multi-image post is visibly multi-image before the download.
+  Widget _buildCarouselStrip(bool isDark, List<dynamic> slots) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.collections,
+                size: 14, color: NeumorphismTheme.getAccentColor(isDark)),
+            const SizedBox(width: 6),
+            Text(
+              'Carousel · ${slots.length} images',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: NeumorphismTheme.getSecondaryTextColor(isDark),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        SizedBox(
+          height: 96,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: slots.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 6),
+            itemBuilder: (context, index) {
+              final url = (slots[index].imageUrl as String?) ?? '';
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: SizedBox(
+                  width: 72,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (url.isEmpty)
+                        Container(
+                          color: NeumorphismTheme.getSurfaceColor(isDark),
+                          child: Icon(Icons.broken_image,
+                              size: 20, color: AppColors.error),
+                        )
+                      else
+                        Image.network(
+                          url,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) => Container(
+                            color: NeumorphismTheme.getSurfaceColor(isDark),
+                            child: Icon(Icons.broken_image,
+                                size: 20, color: AppColors.error),
+                          ),
+                        ),
+                      Positioned(
+                        left: 4,
+                        bottom: 4,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.7),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            '${index + 1}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
   }
 
   /// Build image preview
   Widget _buildImagePreview(String imageUrl) {
+    // A video-only pin may carry no thumbnail at all: never hand an empty URL
+    // to Image.network (it throws and renders a red error box).
+    if (imageUrl.isEmpty) {
+      return SizedBox(
+        height: 180,
+        child: Center(
+          child: Icon(Icons.image_not_supported,
+              size: 40, color: AppColors.error),
+        ),
+      );
+    }
     return Image.network(
       imageUrl,
       height: 180,
@@ -296,18 +412,14 @@ extension _HomePagePreview on _HomePageState {
           ),
         ),
         
-        // Muted indicator
+        // Mute/unmute control (3.1.1) — a real button, not a status icon.
         if (_isVideoInitialized)
           Positioned(
             bottom: 8,
             right: 8,
-            child: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.6),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: const Icon(Icons.volume_off, color: Colors.white, size: 16),
+            child: PreviewAudioToggle(
+              muted: _isVideoMuted,
+              onToggle: (_) => _toggleVideoMute(),
             ),
           ),
       ],

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../../core/media/image_selection.dart';
 import '../../core/media/video_selection.dart';
 import '../models/author.dart';
 import '../models/media_result.dart';
@@ -168,22 +169,30 @@ class PinterestParser {
   }
 
   /// Best image from an images rendition map (JS pickBestImage port):
-  /// prefer `orig`, else largest pixel area, else first entry with a URL.
+  /// prefer `orig`, else the highest-resolution URL, else largest pixel area,
+  /// else first entry with a URL.
+  ///
+  /// 3.1.1 fix: ranking is by rendition size (image_selection), not by pixel
+  /// area alone — live records carry `orig` entries with null width/height, so
+  /// the area sort silently ranked a derivative above the master.
   static Map<String, dynamic>? _bestImageFromImagesMap(
       Map<String, dynamic>? images) {
     if (images == null || images.isEmpty) return null;
     final orig = images['orig'];
     if (orig is Map<String, dynamic> && orig['url'] is String) return orig;
     Map<String, dynamic>? best;
-    int bestArea = -1;
+    var bestRank = -2;
+    var bestArea = -1;
     images.forEach((_, v) {
       if (v is! Map<String, dynamic>) return;
       final url = v['url'];
       if (url is! String || url.isEmpty) return;
+      final rank = pinterestImageRank(url);
       final w = v['width'] is int ? v['width'] as int : 0;
       final h = v['height'] is int ? v['height'] as int : 0;
       final area = w * h;
-      if (area > bestArea) {
+      if (rank > bestRank || (rank == bestRank && area > bestArea)) {
+        bestRank = rank;
         bestArea = area;
         best = v;
       }
@@ -197,23 +206,44 @@ class PinterestParser {
   /// probing): any top-level key `images_\w+` holding either a rendition map
   /// directly (`images_orig: {url, ...}`) or a wrapper of renditions
   /// (`images_variants: {orig: {url, ...}}`).
+  ///
+  /// 3.1.1 fix: the best rendition across ALL flat maps wins. The old
+  /// first-insertion-order return picked whichever key the server happened to
+  /// emit first, which on live single-pin records is `images_60x60` — a 6 KB
+  /// thumbnail downloaded as the pin's image while `images_orig` sat right
+  /// there (real capture; see reports/3.1.1-device-bugfix.md).
   static Map<String, dynamic>? _bestImageFromFlatMaps(
       Map<String, dynamic> record) {
+    final candidates = <Map<String, dynamic>>[];
     for (final e in record.entries) {
       if (!_flatImagesKeyPattern.hasMatch(e.key)) continue;
       if (e.value is! Map<String, dynamic>) continue;
       final flat = e.value as Map<String, dynamic>;
-      // Rendition map directly (carries a url) — use it as-is.
-      if (flat['url'] is String) return flat;
-      // Wrapper of renditions — pick the best child.
+      // Rendition map directly (carries a url).
+      if (flat['url'] is String) {
+        candidates.add(flat);
+        continue;
+      }
+      // Wrapper of renditions — consider its best child.
       final best = _bestImageFromImagesMap(flat);
-      if (best != null) return best;
+      if (best != null) candidates.add(best);
     }
-    return null;
+    if (candidates.isEmpty) return null;
+    Map<String, dynamic>? best;
+    var bestRank = -2;
+    for (final c in candidates) {
+      final rank = pinterestImageRank(c['url'] as String?);
+      if (rank > bestRank) {
+        bestRank = rank;
+        best = c;
+      }
+    }
+    return best;
   }
 
   /// Resolve the record's best image URL (JS chain): `imageLargeUrl`
-  /// preferred, then the `images` map, then flat `images_*` maps.
+  /// preferred, then the `images` map, then flat `images_*` maps — each of the
+  /// latter two ranked by rendition size (3.1.1 fix), never by insertion order.
   static Map<String, dynamic>? _resolveImage(Map<String, dynamic> record) {
     final large = record['imageLargeUrl'];
     if (large is String && large.isNotEmpty) {
@@ -224,12 +254,29 @@ class PinterestParser {
     return _bestImageFromFlatMaps(record);
   }
 
-  /// Resolve the record's best video (JS chain): merged `videoDataV2` groups
-  /// ranked by selectVideo (07.2). Navigates the single-pin shape
-  /// `storyPinData.pages[*].blocks[*].videoDataV2` (first page/block carrying
-  /// one), then falls back to record-level keys. Null when no video.
+  /// Resolve the record's best video (JS chain): every `videoDataV2` group
+  /// found under `storyPinData.pages[*].blocks[*]` (plus the record-level key)
+  /// merged, then ranked by selectVideo (07.2) — so a direct MP4 anywhere in
+  /// the record wins over an HLS-only group (3.1.1 fix; see [_videoTier]).
+  /// Null when the record carries no rendition with a URL.
   static VideoUrl? _resolveVideo(Map<String, dynamic> record) {
-    Map<String, dynamic>? v2;
+    final merged = <String, dynamic>{};
+    void mergeFrom(Map<String, dynamic>? v2) {
+      final list = videoListFromVideoDataV2(v2);
+      if (list == null) return;
+      list.forEach((key, value) {
+        if (value is! Map<String, dynamic>) return;
+        final existing = merged[key];
+        // A rendition WITHOUT a url never displaces one WITH a url (live
+        // records repeat a group key with only a duration in one payload).
+        final valueHasUrl = value['url'] is String;
+        final existingHasUrl =
+            existing is Map<String, dynamic> && existing['url'] is String;
+        if (existingHasUrl && !valueHasUrl) return;
+        merged[key] = value;
+      });
+    }
+
     final storyPinData = record['storyPinData'] as Map<String, dynamic>?;
     final pages = storyPinData?['pages'] as List<dynamic>?;
     if (pages != null) {
@@ -239,17 +286,12 @@ class PinterestParser {
         if (blocks == null) continue;
         for (final block in blocks) {
           if (block is! Map<String, dynamic>) continue;
-          final candidate = block['videoDataV2'] as Map<String, dynamic>?;
-          if (candidate != null) {
-            v2 = candidate;
-            break;
-          }
+          mergeFrom(block['videoDataV2'] as Map<String, dynamic>?);
         }
-        if (v2 != null) break;
       }
     }
-    v2 ??= record['videoDataV2'] as Map<String, dynamic>?;
-    return selectVideo(videoListFromVideoDataV2(v2));
+    mergeFrom(record['videoDataV2'] as Map<String, dynamic>?);
+    return selectVideo(merged.isEmpty ? null : merged);
   }
 
   /// Author fallback chain (audit extraction.md row): pinner →
@@ -305,6 +347,30 @@ class PinterestParser {
     return slots;
   }
 
+  /// Score tuple used to choose between media-bearing relay records:
+  /// (video tier, image resolution, carousel slots). Higher wins, compared
+  /// left to right. 3.1.1: prevents an HLS-only or thumbnail-only record from
+  /// shadowing the record that carries the direct MP4 / the full-size image.
+  ///
+  /// Video tier: 2 = direct MP4 (no conversion), 1 = video needing conversion
+  /// (HLS), 0 = no video. Pinterest serves SEVERAL relay records per pin and
+  /// their `videoDataV2` payloads DIFFER — on the reported pins the first
+  /// record offers only HLS while a later one carries the direct `expMp4`
+  /// rendition, so "first record with media wins" downloaded an HLS playlist as
+  /// `<pinId>_video.mp4` even though a progressive MP4 existed.
+  static List<int> _mediaScore(MediaResult m) => [
+        !m.hasVideoContent ? 0 : (m.videoNeedConvert ? 1 : 2),
+        pinterestImageRank(m.imageUrl),
+        m.slots.length,
+      ];
+
+  static bool _scoreGreater(List<int> a, List<int> b) {
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return a[i] > b[i];
+    }
+    return false;
+  }
+
   /// Full media extraction from one record (JS mediaFromPinRecord port).
   /// Null when the record carries neither image, video, nor carousel slots.
   static MediaResult? _mediaFromRecord(
@@ -326,6 +392,7 @@ class PinterestParser {
       entityId: pinData['entityId'] as String?,
       imageUrl: imageUrl,
       videoUrl: video?.url,
+      videoNeedConvert: video?.needConvert ?? false,
       thumbnail: video?.thumbnail,
       isVideo: video != null,
       hasImage: imageUrl != null,
@@ -339,20 +406,27 @@ class PinterestParser {
   }
 
   static MediaResult? parseImageData(String html, String pinId) {
+    MediaResult? best;
+    var bestRank = -2;
     for (final record in _candidateRecords(html)) {
       final image = _resolveImage(record);
       final url = image?['url'];
       if (url is! String || url.isEmpty) continue;
-      return MediaResult(
-        author: _authorFrom(record),
-        title: _titleFrom(record),
-        pinId: pinId,
-        imageUrl: url,
-        isVideo: false,
-        message: 'image found for -> $pinId',
-      );
+      // 3.1.1: highest-resolution image across records.
+      final rank = pinterestImageRank(url);
+      if (best == null || rank > bestRank) {
+        bestRank = rank;
+        best = MediaResult(
+          author: _authorFrom(record),
+          title: _titleFrom(record),
+          pinId: pinId,
+          imageUrl: url,
+          isVideo: false,
+          message: 'image found for -> $pinId',
+        );
+      }
     }
-    return null;
+    return best;
   }
 
   /// Parse video data from single pin page HTML
@@ -364,20 +438,30 @@ class PinterestParser {
   ///   "result": { "thumbnail", "url" }
   /// }
   static MediaResult? parseVideoData(String html, String pinId) {
+    MediaResult? best;
+    List<int>? bestScore;
     for (final record in _candidateRecords(html)) {
       final video = _resolveVideo(record);
       if (video == null) continue;
-      return MediaResult(
+      final candidate = MediaResult(
         author: _authorFrom(record),
         title: _titleFrom(record),
         pinId: pinId,
         videoUrl: video.url,
+        videoNeedConvert: video.needConvert,
         thumbnail: video.thumbnail,
         isVideo: true,
+        hasVideoContent: true,
         message: 'video found for -> $pinId',
       );
+      // 3.1.1: a direct MP4 elsewhere in the page beats an HLS-only record.
+      final score = _mediaScore(candidate);
+      if (best == null || _scoreGreater(score, bestScore!)) {
+        best = candidate;
+        bestScore = score;
+      }
     }
-    return null;
+    return best;
   }
 
   /// Classified single-pin parsing (Phase 03 / extraction plan 01):
@@ -422,12 +506,22 @@ class PinterestParser {
   /// flat `images_*` maps and title/author fallbacks (07.1) and carousel
   /// slots (07.3). Legacy firstMatch semantics superseded deliberately.
   static MediaResult? parseMediaData(String html, String pinId) {
+    // 3.1.1: richest record wins by (video tier, image resolution, slots) —
+    // NOT simply the first record that carries any media. Live single-pin
+    // pages repeat the pin across relay payloads with DIFFERENT renditions
+    // (HLS-only vs direct MP4, 60x60-first vs orig), so first-match selection
+    // silently produced an HLS-download and thumbnail-quality images.
+    MediaResult? best;
+    List<int>? bestScore;
     for (final record in _candidateRecords(html)) {
-      // JS: prefer the first record that actually carries media
-      // (mediaFromPinRecord(d).length > 0 before candidates[0]).
       final media = _mediaFromRecord(record, pinId);
-      if (media != null) return media;
+      if (media == null) continue;
+      final score = _mediaScore(media);
+      if (best == null || _scoreGreater(score, bestScore!)) {
+        best = media;
+        bestScore = score;
+      }
     }
-    return null;
+    return best;
   }
 }

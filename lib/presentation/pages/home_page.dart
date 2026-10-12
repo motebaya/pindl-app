@@ -17,6 +17,7 @@ import '../providers/settings_provider.dart';
 import '../providers/theme_provider.dart';
 import '../widgets/board_picker.dart';
 import '../widgets/console_panel.dart';
+import '../widgets/preview_audio_toggle.dart';
 import '../widgets/soft_button.dart';
 import '../widgets/soft_card.dart';
 import '../widgets/soft_checkbox.dart';
@@ -50,6 +51,12 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
   VideoPlayerController? _videoController;
   String? _currentVideoUrl;
   bool _isVideoInitialized = false;
+
+  /// Preview audio state. Autoplay stays muted (an unexpected sound on a pin
+  /// preview is hostile), but the speaker badge is a real toggle — 3.1.1: the
+  /// icon was a static `Icons.volume_off` with no gesture, so a user could
+  /// never unmute the preview.
+  bool _isVideoMuted = true;
 
   // Storage permission state
   bool _hasStoragePermission = true;
@@ -242,7 +249,7 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
       
       await _videoController!.initialize();
       _videoController!.setLooping(true);
-      _videoController!.setVolume(0); // Muted autoplay
+      await _videoController!.setVolume(_isVideoMuted ? 0 : 1);
       await _videoController!.play();
       
       if (mounted) {
@@ -254,6 +261,20 @@ class _HomePageState extends ConsumerState<HomePage> with WidgetsBindingObserver
       debugPrint('Video init error: $e');
       _disposeVideoController();
     }
+  }
+
+  /// Toggle preview audio on/off (3.1.1).
+  Future<void> _toggleVideoMute() async {
+    final controller = _videoController;
+    if (controller == null || !_isVideoInitialized) return;
+    final muted = !_isVideoMuted;
+    try {
+      await controller.setVolume(muted ? 0 : 1);
+    } catch (e) {
+      debugPrint('Video volume change error: $e');
+      return;
+    }
+    if (mounted) setState(() => _isVideoMuted = muted);
   }
 
   void _validateInput(String value) {

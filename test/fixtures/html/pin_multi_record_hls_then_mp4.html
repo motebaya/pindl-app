@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<!-- Fixture (3.1.1): the live single-pin shape where the pin appears in SEVERAL
+     relay records whose video payloads differ — the FIRST record offers only
+     HLS (videoList720P.v720P has no url; the m3u8 sits in videoListMobile and
+     v_hlsv4_video_list), the SECOND carries the direct expMp4 rendition.
+     Before 3.1.1 the parser returned the first media-bearing record, so the
+     app downloaded the HLS master playlist verbatim as <pinId>_video.mp4.
+     CAUTION: this comment deliberately contains NO sample relay call text
+     (a commented example would itself match the scan regex and poison results). -->
+<html>
+<head><title>multi record: hls first, mp4 second</title></head>
+<body>
+  <script>
+    window.__PWS_RELAY_REGISTER_COMPLETED_REQUEST__("pinterestapp:PinPage:closeup:1", {"data":{"pin_closeup":{"data":{"entityId":"999888777666555444333222111000987654321","title":"Fixture Multi Record Pin","imageLargeUrl":"https://i.pinimg.com/736x/aa/bb/cc/aabbcc11223344556677889900112233.jpg","storyPinData":{"pages":[{"blocks":[{"videoDataV2":{"videoListMobile":{"vHLSV3MOBILE":{"url":"https://v1.pinimg.com/videos/iht/hls/aa/bb/cc/fixturehlsmaster.m3u8","thumbnail":"https://i.pinimg.com/videos/thumbnails/originals/aa/bb/cc/fixturethumb.jpg","width":1080,"height":1920}},"videoList720P":{"v720P":{"duration":4033}},"videoList":{"vHLSV3MOBILE":{"url":"https://v1.pinimg.com/videos/iht/hls/aa/bb/cc/fixturehlsmaster.m3u8","width":1080,"height":1920}},"v_hlsv4_video_list":{"vHLSV4":{"url":"https://v1.pinimg.com/videos/iht/hls/aa/bb/cc/fixturehlsmaster.m3u8","width":1080,"height":1920}}}}]}]}},"pinner":{"username":"fixtureuser","entityId":"111222333444555666"},"closeupAttribution":{"fullName":"Fixture Author"}}}});
+  </script>
+  <script>
+    window.__PWS_RELAY_REGISTER_COMPLETED_REQUEST__("pinterestapp:PinPage:closeup:2", {"data":{"pin_closeup":{"data":{"entityId":"999888777666555444333222111000987654321","title":"Fixture Multi Record Pin","imageLargeUrl":"https://i.pinimg.com/736x/aa/bb/cc/aabbcc11223344556677889900112233.jpg","storyPinData":{"pages":[{"blocks":[{"videoDataV2":{"videoList":{"vHLSV3MOBILE":{"url":"https://v1.pinimg.com/videos/iht/hls/aa/bb/cc/fixturehlsmaster.m3u8","width":1080,"height":1920}},"videoListMobile":{"vHLSV3MOBILE":{"url":"https://v1.pinimg.com/videos/iht/hls/aa/bb/cc/fixturehlsmaster.m3u8","width":1080,"height":1920}},"videoListEXP3":null,"videoListEXP4":null,"videoList720P":{"v720P":{"url":"https://v1.pinimg.com/videos/iht/expMp4/aa/bb/cc/fixture720w.mp4","thumbnail":"https://i.pinimg.com/videos/thumbnails/originals/aa/bb/cc/fixturethumb.jpg","width":1080,"height":1920,"duration":4033}},"videoListForCaptions":{"v720P":{"captionsUrls":null}}}}]}]}},"pinner":{"username":"fixtureuser","entityId":"111222333444555666"},"closeupAttribution":{"fullName":"Fixture Author"}}}});
+  </script>
+</body>
+</html>

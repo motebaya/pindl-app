@@ -109,6 +109,11 @@ class DownloadService {
       receiveTimeout: const Duration(minutes: 5),
       headers: {
         'User-Agent': PinterestConstants.userAgent,
+        // 3.1.1: media files are already compressed — asking for identity
+        // keeps Content-Length authoritative, so byte-range resume and the
+        // completion check compare like with like (a compressed response's
+        // Content-Length describes the wire body, not the decoded stream).
+        'Accept-Encoding': 'identity',
       },
     ));
   }

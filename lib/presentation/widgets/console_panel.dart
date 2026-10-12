@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../core/theme/neumorphism_theme.dart';
 import '../../data/services/log_service.dart';
 
@@ -33,6 +34,29 @@ class _ConsolePanelState extends State<ConsolePanel> {
     super.initState();
     _logs.addAll(widget.initialEntries);
     _subscription = widget.logStream.listen(_addLog);
+  }
+
+  /// Plain-text rendering of one log line — the exact string the user sees.
+  String _lineText(LogEntry entry) =>
+      '[${_formatTime(entry.timestamp)}] [${entry.level.name.toUpperCase()}] '
+      '${entry.message}';
+
+  String _formatTime(DateTime time) {
+    return '${time.hour.toString().padLeft(2, '0')}:'
+        '${time.minute.toString().padLeft(2, '0')}:'
+        '${time.second.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _copyAll() async {
+    final text = _logs.map(_lineText).join('\n');
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text('Copied ${_logs.length} log line(s)'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   void _addLog(LogEntry entry) {
@@ -106,37 +130,33 @@ class _ConsolePanelState extends State<ConsolePanel> {
                   ),
                 ),
                 const Spacer(),
-                GestureDetector(
-                  onTap: () => setState(() => _autoScroll = !_autoScroll),
-                  child: Tooltip(
-                    message: _autoScroll ? 'Pause scroll' : 'Auto scroll',
-                    child: Icon(
-                      _autoScroll
-                          ? Icons.vertical_align_bottom
-                          : Icons.pause,
-                      size: 14,
-                      color:
-                          isDark ? Colors.grey.shade500 : Colors.grey.shade600,
-                    ),
-                  ),
+                // 3.1.1: one-tap copy of the whole console so a user hitting an
+                // error can hand the log over without selecting line by line.
+                _ConsoleAction(
+                  icon: Icons.copy_all_outlined,
+                  tooltip: 'Copy all logs',
+                  isDark: isDark,
+                  onTap: _logs.isEmpty ? null : _copyAll,
                 ),
-                const SizedBox(width: 12),
-                GestureDetector(
+                _ConsoleAction(
+                  icon: _autoScroll
+                      ? Icons.vertical_align_bottom
+                      : Icons.pause,
+                  tooltip: _autoScroll ? 'Pause scroll' : 'Auto scroll',
+                  isDark: isDark,
+                  onTap: () => setState(() => _autoScroll = !_autoScroll),
+                ),
+                _ConsoleAction(
+                  icon: Icons.delete_outline,
+                  tooltip: 'Clear logs',
+                  isDark: isDark,
                   onTap: () => setState(() => _logs.clear()),
-                  child: Tooltip(
-                    message: 'Clear logs',
-                    child: Icon(
-                      Icons.delete_outline,
-                      size: 14,
-                      color:
-                          isDark ? Colors.grey.shade500 : Colors.grey.shade600,
-                    ),
-                  ),
                 ),
               ],
             ),
           ),
-          // Log content
+          // Log content — selectable (3.1.1): users must be able to copy an
+          // error out of the console verbatim.
           Expanded(
             child: _logs.isEmpty
                 ? Center(
@@ -151,17 +171,59 @@ class _ConsolePanelState extends State<ConsolePanel> {
                       ),
                     ),
                   )
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(8),
-                    itemCount: _logs.length,
-                    itemBuilder: (context, index) {
-                      final log = _logs[index];
-                      return _LogLine(entry: log, isDark: isDark);
-                    },
+                : SelectionArea(
+                    child: ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(8),
+                      itemCount: _logs.length,
+                      itemBuilder: (context, index) {
+                        final log = _logs[index];
+                        return _LogLine(entry: log, isDark: isDark);
+                      },
+                    ),
                   ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Small header action button (console panel chrome).
+class _ConsoleAction extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final bool isDark;
+  final VoidCallback? onTap;
+
+  const _ConsoleAction({
+    required this.icon,
+    required this.tooltip,
+    required this.isDark,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Tooltip(
+          message: tooltip,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            child: Icon(
+              icon,
+              size: 16,
+              color: onTap == null
+                  ? (isDark ? Colors.grey.shade700 : Colors.grey.shade400)
+                  : (isDark ? Colors.grey.shade400 : Colors.grey.shade700),
+            ),
+          ),
+        ),
       ),
     );
   }

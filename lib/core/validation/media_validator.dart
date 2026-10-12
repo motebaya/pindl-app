@@ -90,6 +90,24 @@ class MagicBytes {
   static const int _webmHead = 0x1A45DFA3;
   static const int _ftypOffset = 4;
 
+  /// HLS playlist marker (`#EXTM3U`). 3.1.1: a downloaded m3u8 body used to
+  /// pass the validator as "unknown signature, tolerated for video" and was
+  /// imported as a corrupt `<pinId>_video.mp4` (device report: 920 B file whose
+  /// content is the master playlist). Playlists are never media files.
+  static const String hlsMarker = '#EXTM3U';
+
+  /// True when the head looks like an HLS playlist (`.m3u8`).
+  static bool isHlsPlaylist(Uint8List head) {
+    if (head.length < hlsMarker.length) return false;
+    // Allow a UTF-8 BOM and leading whitespace, as players do.
+    var start = 0;
+    if (head.length >= 3 && head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF) {
+      start = 3;
+    }
+    final text = String.fromCharCodes(head.sublist(start, head.length));
+    return text.trimLeft().startsWith(hlsMarker);
+  }
+
   /// Detect the media super-type of a byte head, or null if unknown.
   static String? detect(Uint8List head) {
     if (head.length < 12) return null;
@@ -154,6 +172,14 @@ class MediaValidator {
 
     final detected = MagicBytes.detect(head);
 
+    // 3.1.1: an HLS playlist is a text manifest, never a media file — refuse it
+    // for BOTH expectations before the tolerant-video branch can accept it.
+    if (MagicBytes.isHlsPlaylist(head)) {
+      return ValidationResult.invalid(
+        'HLS playlist (m3u8), not a media file — needs HLS conversion',
+      );
+    }
+
     // HTML pages disguised as media: signatures miss them, but their head
     // bytes are text — refuse explicitly with the diagnosable reason.
     if (detected == null && _looksLikeDocument(head)) {
@@ -167,6 +193,13 @@ class MediaValidator {
         );
       }
       return ValidationResult.valid;
+    }
+
+    // 3.1.1: any other *plain text* body is a manifest/error payload, not a
+    // container. The tolerant-video nuance exists for unknown BINARY
+    // containers (video containers vary) — it was never meant to bless text.
+    if (_looksLikePlainText(head)) {
+      return ValidationResult.invalid('downloaded content is text, not media');
     }
 
     // Unknown signature: fail-closed for images, tolerant for videos
@@ -210,5 +243,22 @@ class MediaValidator {
       if (text.startsWith(prefix)) return true;
     }
     return text.startsWith('<!doctype') || text.startsWith('<html');
+  }
+
+  /// True when the head decodes as printable text (no NUL, >95% printable
+  /// ASCII/UTF-8 continuation bytes). Distinguishes a text manifest from an
+  /// unrecognised BINARY container, which the tolerant-video rule must keep
+  /// accepting (SEC-4 nuance; the tolerant branch still requires the size
+  /// floor and a passing header guard).
+  static bool _looksLikePlainText(Uint8List head) {
+    if (head.isEmpty) return false;
+    var printable = 0;
+    for (final b in head) {
+      if (b == 0) return false; // binary marker
+      final isPrintable = (b >= 0x20 && b < 0x7F) || b == 0x09 || b == 0x0A ||
+          b == 0x0D || b >= 0x80;
+      if (isPrintable) printable++;
+    }
+    return printable / head.length > 0.95;
   }
 }

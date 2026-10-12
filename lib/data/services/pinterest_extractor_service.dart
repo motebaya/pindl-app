@@ -29,6 +29,13 @@ class PinterestExtractorService {
   /// Default max pages (can be overridden per request)
   static const int defaultMaxPages = 50;
 
+  /// 3.1.1: number of rounds over [PinterestConstants.pinHosts] for a
+  /// single-pin page fetch. The SSR relay payload is served nondeterministically
+  /// (6 identical requests -> 2,2,2,2,0,0 payloads), so two rounds over two
+  /// hosts makes a false `E_NO_DATA` very unlikely while keeping the worst case
+  /// bounded at four page fetches.
+  static const int maxRelayAttempts = 2;
+
   PinterestConfig? _config;
 
   PinterestExtractorService({
@@ -47,6 +54,9 @@ class PinterestExtractorService {
   void _logFetch(String message) {
     _logService?.fetch(message);
   }
+
+  /// Host label for diagnostics (never throws on a malformed URL).
+  static String _hostOf(String url) => Uri.tryParse(url)?.host ?? url;
 
   /// Username of the currently cached config, if any.
   String? get cachedUsername => _cachedUsername;
@@ -522,125 +532,56 @@ class PinterestExtractorService {
   Future<MediaResult> getPinImage({
     required String pinIdOrUrl,
     CancelToken? cancelToken,
-  }) async {
-    final pinInfo = PinUrlValidator.parse(pinIdOrUrl);
-    if (pinInfo == null) {
-      throw ValidationException('Invalid pin ID or URL: $pinIdOrUrl');
-    }
-
-    // Resolve short URL if needed
-    String pinUrl = pinInfo.url;
-    String pinId = pinInfo.id;
-
-    if (pinInfo.isShortUrl) {
-      final resolved = await _resolveShortUrl(pinInfo.url, cancelToken);
-      pinUrl = resolved.url;
-      pinId = resolved.id;
-    }
-
-    try {
-      final response = await retry(
-        () => _dio.get<String>(pinUrl, cancelToken: cancelToken),
+  }) =>
+      _fetchPinMedia(
+        pinIdOrUrl: pinIdOrUrl,
+        mediaNoun: 'image',
+        parse: PinterestParser.parseImageDataOrNull,
         cancelToken: cancelToken,
-        onLog: _logFetch,
       );
-
-      if (response.data == null) {
-        throw ExtractionException('Empty response from pin page');
-      }
-
-      final outcome = PinterestParser.parseImageDataOrNull(response.data!, pinId);
-      if (outcome.isPinNotFound) {
-        throw PinNotFoundException('Pin not found: $pinId', code: 'E_PIN_NOT_FOUND');
-      }
-      if (outcome.isSourceChanged) {
-        throw SourceChangedException(
-          'No relay payload on pin page: $pinId',
-          code: 'E_NO_DATA',
-        );
-      }
-      final result = outcome.result;
-      if (result == null) {
-        throw NoMediaException('No image found for pin: $pinId', code: 'E_NO_MEDIA');
-      }
-
-      return result;
-    } on DioException catch (e) {
-      if (e.type == DioExceptionType.cancel) {
-        throw CancelledException();
-      }
-      throw NetworkException(
-        'Failed to fetch pin: ${e.message}',
-        statusCode: e.response?.statusCode,
-        originalError: e,
-      );
-    }
-  }
 
   /// Get video from a single pin
   /// Ported from Pinterest.getVideos()
   Future<MediaResult> getPinVideo({
     required String pinIdOrUrl,
     CancelToken? cancelToken,
-  }) async {
-    final pinInfo = PinUrlValidator.parse(pinIdOrUrl);
-    if (pinInfo == null) {
-      throw ValidationException('Invalid pin ID or URL: $pinIdOrUrl');
-    }
-
-    // Resolve short URL if needed
-    String pinUrl = pinInfo.url;
-    String pinId = pinInfo.id;
-
-    if (pinInfo.isShortUrl) {
-      final resolved = await _resolveShortUrl(pinInfo.url, cancelToken);
-      pinUrl = resolved.url;
-      pinId = resolved.id;
-    }
-
-    try {
-      final response = await retry(
-        () => _dio.get<String>(pinUrl, cancelToken: cancelToken),
+  }) =>
+      _fetchPinMedia(
+        pinIdOrUrl: pinIdOrUrl,
+        mediaNoun: 'video',
+        parse: PinterestParser.parseVideoDataOrNull,
         cancelToken: cancelToken,
-        onLog: _logFetch,
       );
-
-      if (response.data == null) {
-        throw ExtractionException('Empty response from pin page');
-      }
-
-      final outcome = PinterestParser.parseVideoDataOrNull(response.data!, pinId);
-      if (outcome.isPinNotFound) {
-        throw PinNotFoundException('Pin not found: $pinId', code: 'E_PIN_NOT_FOUND');
-      }
-      if (outcome.isSourceChanged) {
-        throw SourceChangedException(
-          'No relay payload on pin page: $pinId',
-          code: 'E_NO_DATA',
-        );
-      }
-      final result = outcome.result;
-      if (result == null) {
-        throw NoMediaException('No video found for pin: $pinId', code: 'E_NO_MEDIA');
-      }
-
-      return result;
-    } on DioException catch (e) {
-      if (e.type == DioExceptionType.cancel) {
-        throw CancelledException();
-      }
-      throw NetworkException(
-        'Failed to fetch pin: ${e.message}',
-        statusCode: e.response?.statusCode,
-        originalError: e,
-      );
-    }
-  }
 
   /// Get all media (image and video) from a single pin
   /// Returns MediaResult with both imageUrl and videoUrl if available
   Future<MediaResult> getPinMedia({
     required String pinIdOrUrl,
+    CancelToken? cancelToken,
+  }) =>
+      _fetchPinMedia(
+        pinIdOrUrl: pinIdOrUrl,
+        mediaNoun: 'media',
+        parse: PinterestParser.parseMediaDataOrNull,
+        cancelToken: cancelToken,
+      );
+
+  /// 3.1.1 — single-pin fetch with a bounded retry plan across pin hosts.
+  ///
+  /// Live evidence (reports/3.1.1-device-bugfix.md): the SSR relay payload is
+  /// NOT guaranteed per response. Six identical requests to
+  /// `https://id.pinterest.com/pin/617837642695441979/` returned 2, 2, 2, 2, 0,
+  /// 0 relay invocations — the same URL, the same headers, nondeterministic
+  /// backend variants. One attempt therefore fails roughly a third of the time
+  /// with `E_NO_DATA` on a perfectly public, extractable pin (the user's
+  /// report). Plan: [maxRelayAttempts] rounds over the known pin hosts, stopping
+  /// at the first response that carries a payload. A PinNotFound record
+  /// short-circuits (the pin really is gone); only exhausting the plan yields
+  /// E_NO_DATA, and the message names every host tried.
+  Future<MediaResult> _fetchPinMedia({
+    required String pinIdOrUrl,
+    required String mediaNoun,
+    required PinParseOutcome Function(String html, String pinId) parse,
     CancelToken? cancelToken,
   }) async {
     final pinInfo = PinUrlValidator.parse(pinIdOrUrl);
@@ -659,29 +600,68 @@ class PinterestExtractorService {
     }
 
     try {
-      final response = await retry(
-        () => _dio.get<String>(pinUrl, cancelToken: cancelToken),
-        cancelToken: cancelToken,
-        onLog: _logFetch,
-      );
+      // Attempt plan: the URL we were handed first (short-URL resolution
+      // included), then each known pin host, repeated for
+      // [maxRelayAttempts] rounds — the payload is server-variant, so a retry
+      // is the actual fix (evidence table in the 3.1.1 report).
+      final candidates = <String>[pinUrl];
+      for (final host in PinterestConstants.pinHosts) {
+        final candidate = '$host/pin/$pinId/';
+        if (!candidates.contains(candidate)) candidates.add(candidate);
+      }
+      final plan = <String>[
+        for (var round = 0; round < maxRelayAttempts; round++) ...candidates,
+      ];
 
-      if (response.data == null) {
+      PinParseOutcome? lastOutcome;
+      final attempted = <String>[];
+      for (var i = 0; i < plan.length; i++) {
+        final url = plan[i];
+        final response = await retry(
+          () => _dio.get<String>(url, cancelToken: cancelToken),
+          cancelToken: cancelToken,
+          onLog: _logFetch,
+        );
+        final html = response.data;
+        if (html == null || html.isEmpty) {
+          _logFetch('empty pin page body from ${_hostOf(url)}');
+          continue;
+        }
+        if (!attempted.contains(_hostOf(url))) attempted.add(_hostOf(url));
+        final outcome = parse(html, pinId);
+        if (!outcome.isSourceChanged) {
+          if (i > 0) {
+            _logFetch('relay payload recovered from ${_hostOf(url)} on '
+                'attempt ${i + 1} (the SSR payload is not served on every '
+                'response)');
+          }
+          lastOutcome = outcome;
+          break;
+        }
+        lastOutcome = outcome;
+        if (i + 1 < plan.length) {
+          _logFetch('page carried no relay payload '
+              '(${_hostOf(url)}, attempt ${i + 1}/${plan.length}) — retrying');
+        }
+      }
+
+      if (lastOutcome == null) {
         throw ExtractionException('Empty response from pin page');
       }
-
-      final outcome = PinterestParser.parseMediaDataOrNull(response.data!, pinId);
-      if (outcome.isPinNotFound) {
+      if (lastOutcome.isPinNotFound) {
         throw PinNotFoundException('Pin not found: $pinId', code: 'E_PIN_NOT_FOUND');
       }
-      if (outcome.isSourceChanged) {
+      if (lastOutcome.isSourceChanged) {
         throw SourceChangedException(
-          'No relay payload on pin page: $pinId',
+          'No relay payload on pin page: $pinId (tried ${attempted.join(', ')})',
           code: 'E_NO_DATA',
         );
       }
-      final result = outcome.result;
+      final result = lastOutcome.result;
       if (result == null) {
-        throw NoMediaException('No media found for pin: $pinId', code: 'E_NO_MEDIA');
+        throw NoMediaException(
+            'No $mediaNoun found for pin: $pinId',
+            code: 'E_NO_MEDIA');
       }
 
       return result;

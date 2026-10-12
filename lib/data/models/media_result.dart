@@ -35,6 +35,14 @@ class MediaResult extends Equatable {
   final String? entityId; // Added: entityId from response for metadata filename
   final String? imageUrl;
   final String? videoUrl;
+
+  /// True when [videoUrl] is an HLS master playlist that must be parsed and
+  /// converted (FFmpeg build) instead of being fetched as a media file.
+  /// 3.1.1: the single-pin download path previously had no HLS knowledge at
+  /// all, so an m3u8 was saved verbatim as `<pinId>_video.mp4` (real device
+  /// report: a 920 B "video").
+  final bool videoNeedConvert;
+
   final String? thumbnail;
   final bool isVideo;
   final bool hasImage;
@@ -53,6 +61,7 @@ class MediaResult extends Equatable {
     this.entityId,
     this.imageUrl,
     this.videoUrl,
+    this.videoNeedConvert = false,
     this.thumbnail,
     this.isVideo = false,
     this.hasImage = false,
@@ -76,6 +85,12 @@ class MediaResult extends Equatable {
 
   /// Get download URL for video
   String? get videoDownloadUrl => hasVideoContent ? videoUrl : null;
+
+  /// True when the video is an HLS playlist (flagged by the parser, or by the
+  /// unmistakable `.m3u8` suffix as a defensive fallback).
+  bool get videoIsHls =>
+      hasVideoContent &&
+      (videoNeedConvert || (videoUrl?.toLowerCase().endsWith('.m3u8') ?? false));
   
   /// Get the effective ID for metadata filename (entityId or pinId)
   String get metadataId => entityId ?? pinId;
@@ -88,11 +103,13 @@ class MediaResult extends Equatable {
       'entityId': entityId,
       'imageUrl': imageUrl,
       'videoUrl': videoUrl,
+      'videoNeedConvert': videoNeedConvert,
       'thumbnail': thumbnail,
       'isVideo': isVideo,
       'hasImage': hasImage,
       'hasVideoContent': hasVideoContent,
       'message': message,
+      'slots': slots.map((s) => s.toJson()).toList(),
     };
   }
 
@@ -104,6 +121,7 @@ class MediaResult extends Equatable {
       entityId: json['entityId'] as String?,
       imageUrl: json['imageUrl'] as String?,
       videoUrl: json['videoUrl'] as String?,
+      videoNeedConvert: json['videoNeedConvert'] as bool? ?? false,
       thumbnail: json['thumbnail'] as String?,
       isVideo: json['isVideo'] as bool? ?? false,
       hasImage: json['hasImage'] as bool? ?? false,
@@ -124,6 +142,7 @@ class MediaResult extends Equatable {
     String? entityId,
     String? imageUrl,
     String? videoUrl,
+    bool? videoNeedConvert,
     String? thumbnail,
     bool? isVideo,
     bool? hasImage,
@@ -139,6 +158,7 @@ class MediaResult extends Equatable {
       entityId: entityId ?? this.entityId,
       imageUrl: imageUrl ?? this.imageUrl,
       videoUrl: videoUrl ?? this.videoUrl,
+      videoNeedConvert: videoNeedConvert ?? this.videoNeedConvert,
       thumbnail: thumbnail ?? this.thumbnail,
       isVideo: isVideo ?? this.isVideo,
       hasImage: hasImage ?? this.hasImage,
@@ -157,6 +177,7 @@ class MediaResult extends Equatable {
         entityId,
         imageUrl,
         videoUrl,
+        videoNeedConvert,
         thumbnail,
         isVideo,
         hasImage,

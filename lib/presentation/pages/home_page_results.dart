@@ -18,9 +18,16 @@ extension _HomePageResults on _HomePageState {
     int totalToDownload;
     int remainingToDownload;
     if (isSinglePin) {
-      // For single pin with multi-select
+      // For single pin with multi-select. 3.1.1: a carousel contributes ONE
+      // item per slide (that is what the download writes), instead of the
+      // always-1 count that told users an 8-image carousel had a single item.
       int count = 0;
-      if (settings.downloadImage && (singleResult?.hasImage ?? false)) count++;
+      if (settings.downloadImage) {
+        final slots = singleResult?.slots ?? const [];
+        if ((singleResult?.hasImage ?? false)) {
+          count += slots.length > 1 ? slots.length : 1;
+        }
+      }
       if (settings.downloadVideo && (singleResult?.hasVideoContent ?? false)) count++;
       totalToDownload = count;
       remainingToDownload = count;
@@ -218,6 +225,7 @@ extension _HomePageResults on _HomePageState {
             isContinueMode ? 'Remaining Items' : 'Total to Download', 
             isSinglePin
                 ? '$totalToDownload item${totalToDownload != 1 ? 's' : ''}'
+                    '${(singleResult?.slots.length ?? 0) > 1 ? ' (carousel: ${singleResult!.slots.length} images)' : ''}'
                 : isContinueMode
                     ? '$remainingToDownload ${settings.mediaType.name}${remainingToDownload != 1 ? 's' : ''} (of $totalToDownload total)'
                     : '$totalToDownload ${settings.mediaType.name}${totalToDownload != 1 ? 's' : ''}',

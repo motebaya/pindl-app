@@ -5,6 +5,49 @@ All notable changes to PinDL will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2026-10-12
+
+Defect release from a real-device QA pass (`PinDL-ffmpeg-arm64-v8a-v3.1.0-b7.apk`, Poco X6 Pro,
+Android 16 / API 36). User-facing release blurbs for 3.0.0 and 3.1.0 live in `RELEASE_NOTES.md`;
+this entry records the fixes.
+
+### Fixed
+
+- **Video downloads from single pins**: an HLS video pin (`.m3u8` master playlist) was saved as a
+  `<pinId>_video.mp4` file whose contents were the playlist text (~920 B, unplayable) with no error
+  shown. Downloads now route by media type: progressive MP4 is fetched directly, and HLS is parsed
+  and converted to MP4 with FFmpeg before it is imported. On the lite variant an HLS video is now an
+  explicit, honest skip instead of a corrupt file.
+- **"short body: got 920 of 350 bytes" download loop**: the completion check trusted the server's
+  declared `Content-Length`; when the CDN under-declared the body, every retry failed identically.
+  A body larger than the declared length is now accepted (with a log line), downloads request
+  `Accept-Encoding: identity` so the length is comparable, and a declared length is ignored whenever
+  the response is compressed.
+- **Playlists and text accepted as video**: the fail-closed content check now rejects HLS playlists
+  (`#EXTM3U`) and any other plain-text body for both images and videos, so a manifest or an error
+  payload can never be imported as media.
+- **"No relay payload on pin page" (E_NO_DATA) on public pins**: the Pinterest pin page does not
+  serve its data payload on every response. Extraction now retries across the known pin hosts
+  (bounded) and only reports E_NO_DATA after the whole plan is exhausted, naming the hosts tried.
+- **Video quality on video pins**: a pin whose records offer both an HLS stream and a direct MP4 now
+  yields the direct MP4 instead of the playlist rendition; every `videoDataV2` group in the record
+  is considered, not just the first one found.
+- **Thumbnail-quality images (60×60 / 6 KB)**: image renditions are now ranked by resolution instead
+  of server key order, and a thumbnail-sized Pinterest URL is rewritten to the full-resolution
+  `/originals/` rendition before download.
+- **Multi-image (carousel) pins offered and downloaded only one image**: the item count and preview
+  now show every slide, and the download writes one indexed file per slide
+  (`<pinId>_image_<n>.<ext>`).
+- **Video preview could not be unmuted**: the speaker badge on the preview was a static icon with no
+  gesture. It is now a real toggle that unmutes/mutes the playing preview.
+
+### Added
+
+- **Console: selectable text and a one-tap "copy all logs" action**, so an error can be copied out
+  verbatim.
+- **Console capability banner**: the first log line states whether this build can convert HLS
+  (`ffmpeg` build) or not (`lite` build).
+
 ## [2.1.0] - 2026-02-12
 
 ### Added

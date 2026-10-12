@@ -1,9 +1,12 @@
 import 'package:dio/dio.dart';
 
 import '../../core/config/build_config.dart';
+import '../../core/exceptions/pinterest_exception.dart';
+import '../../core/media/image_selection.dart';
 import '../../core/persistence/metadata_schema.dart';
 import '../../core/utils/format_utils.dart';
 import '../models/author.dart';
+import '../models/media_result.dart';
 import '../models/board_selection.dart';
 import '../models/job_state.dart';
 import '../models/pin_item.dart';
@@ -95,6 +98,23 @@ class DownloadRunStats {
   int currentIndex = 0;
 }
 
+/// Outcome of a single-pin download run (3.1.1). Counters mirror the old
+/// inline provider flow 1:1; [wasInterrupted] reports a user cancel observed
+/// during the run (HLS conversion cancel included).
+class SinglePinRunResult {
+  final int downloaded;
+  final int skipped;
+  final int failed;
+  final bool wasInterrupted;
+
+  const SinglePinRunResult({
+    required this.downloaded,
+    required this.skipped,
+    required this.failed,
+    this.wasInterrupted = false,
+  });
+}
+
 /// Early-exit classification (the provider replicates the exact old
 /// edge-path semantics: which state fields are set, and which finalization
 /// side effects are skipped).
@@ -143,6 +163,9 @@ class FeedDownloadResult {
   });
 }
 
+/// Terminal states of the single-pin HLS leg.
+enum _SinglePinHlsOutcome { saved, skipped, failed, cancelled }
+
 /// Phase 08 (08.2) — download coordinator: queue planning (per-media
 /// strategy), the feed download run (regular queue via DownloadService +
 /// HLS conversion branches by flavor), and completion-set math as pure Dart.
@@ -159,6 +182,9 @@ class DownloadCoordinator {
   final HlsService? hlsService;
   final HlsConverter? hlsConverter;
   final DownloadCoordinatorHooks hooks;
+
+  /// Public for tests/probes: the single-pin HLS decision (no I/O).
+  bool get hlsAvailable => hlsService != null && hlsConverter != null;
 
   /// Cancel token mirror — the provider assigns its live token so
   /// cancelDownload keeps a single source of truth.
@@ -289,6 +315,244 @@ class DownloadCoordinator {
       runs.add((choice: choice, baseFolder: folder));
     }
     return runs;
+  }
+
+  /// Runs a single-pin download (3.1.1): image / carousel slots, then video —
+  /// with the HLS decision the flow previously lacked.
+  ///
+  /// Before this, the single-pin path handed every URL — m3u8 included — to
+  /// [DownloadService.downloadFile], so an HLS pin produced a `<pinId>_video.mp4`
+  /// containing the playlist text (device report: "920 B, HLS content, no error
+  /// show in console"). Now:
+  ///   * direct MP4 (or any progressive URL) -> normal byte-range download;
+  ///   * HLS on the FFmpeg build -> parse master playlist, convert to MP4 with
+  ///     FFmpeg, import the validated output;
+  ///   * HLS on the lite build -> explicit, honest skip (same semantics as the
+  ///     feed path), never a corrupt file.
+  ///
+  /// Image URLs are upgraded to the full-size Pinterest rendition before
+  /// download (the 60x60/236x thumbnail bug).
+  Future<SinglePinRunResult> runSinglePinDownload({
+    required MediaResult result,
+    required String outputPath,
+    required bool overwrite,
+    required bool downloadImage,
+    required bool downloadVideo,
+  }) async {
+    var downloaded = 0;
+    var skipped = 0;
+    var failed = 0;
+    var interrupted = false;
+
+    Future<void> downloadOne({
+      required String url,
+      required String filename,
+      required String id,
+    }) async {
+      hooks.downloading('Downloading $filename');
+      try {
+        await downloadService.downloadFile(
+          url: url,
+          outputPath: outputPath,
+          filename: filename,
+          pinId: id,
+          overwrite: overwrite,
+        );
+        hooks.saved('Saved: $filename');
+        downloaded++;
+        hooks.onHistory(filename: filename, url: url, success: true);
+      } on DownloadException catch (e) {
+        if (e.message.contains('already exists')) {
+          hooks.skipped('Skipped: $filename (exists)');
+          skipped++;
+        } else {
+          hooks.failed('Failed: $filename - ${e.message}');
+          failed++;
+          hooks.onHistory(
+            filename: filename,
+            url: url,
+            success: false,
+            errorMessage: e.message,
+          );
+        }
+      } catch (e) {
+        if (e is CancelledException) {
+          interrupted = true;
+          hooks.interrupted('Cancelled: $filename');
+          return;
+        }
+        hooks.failed('Failed: $filename - $e');
+        failed++;
+        hooks.onHistory(
+          filename: filename,
+          url: url,
+          success: false,
+          errorMessage: hooks.mapError(e),
+        );
+      }
+    }
+
+    if (downloadImage) {
+      // Carousel: one download per slot, in slot order, deterministic indexed
+      // names (<pinId>_image_<n>.<ext>, 1-based) — each slot an independent
+      // history entry with its own counting.
+      if (result.slots.length > 1) {
+        hooks.queue('Carousel pin: ${result.slots.length} images to download');
+        for (var i = 0; i < result.slots.length; i++) {
+          final slotUrl = upgradePinterestImageUrl(result.slots[i].imageUrl);
+          final filename = FormatUtils.pinFilename(
+            pinId: result.pinId,
+            role: 'image',
+            url: slotUrl,
+            imageIndex: i + 1,
+          );
+          await downloadOne(
+            url: slotUrl,
+            filename: filename,
+            id: '${result.pinId}_img$i',
+          );
+          if (cancelToken?.isCancelled ?? false) break;
+        }
+      } else {
+        final imageUrl = result.getImageDownloadUrl(useThumbnailForVideo: true);
+        if (imageUrl != null) {
+          final role =
+              (result.hasVideoContent && !result.hasImage) ? 'thumbnail' : 'image';
+          final url = upgradePinterestImageUrl(imageUrl);
+          final filename =
+              FormatUtils.pinFilename(pinId: result.pinId, role: role, url: url);
+          await downloadOne(
+            url: url,
+            filename: filename,
+            id: '${result.pinId}_img',
+          );
+        }
+      }
+    }
+
+    if (downloadVideo && result.hasVideoContent) {
+      final videoUrl = result.videoUrl;
+      if (videoUrl != null) {
+        final filename = FormatUtils.pinFilename(
+            pinId: result.pinId, role: 'video', url: videoUrl);
+
+        if (result.videoIsHls) {
+          final hls = await _downloadSinglePinHls(
+            videoUrl: videoUrl,
+            filename: filename,
+            overwrite: overwrite,
+          );
+          if (hls == _SinglePinHlsOutcome.saved) {
+            downloaded++;
+          } else if (hls == _SinglePinHlsOutcome.skipped) {
+            skipped++;
+          } else if (hls == _SinglePinHlsOutcome.failed) {
+            failed++;
+          } else {
+            interrupted = true;
+          }
+        } else {
+          await downloadOne(
+            url: videoUrl,
+            filename: filename,
+            id: '${result.pinId}_vid',
+          );
+        }
+      }
+    }
+
+    return SinglePinRunResult(
+      downloaded: downloaded,
+      skipped: skipped,
+      failed: failed,
+      wasInterrupted: interrupted,
+    );
+  }
+
+  /// HLS leg of the single-pin flow. Returns the outcome class so the caller's
+  /// counters stay identical to the pre-3.1.1 shape.
+  Future<_SinglePinHlsOutcome> _downloadSinglePinHls({
+    required String videoUrl,
+    required String filename,
+    required bool overwrite,
+  }) async {
+    const videosFolder = 'PinDL';
+
+    // Capability check, not the compile-time flag: JobNotifier constructs the
+    // HLS services ONLY when BuildConfig.enableFfmpeg is true (which is what
+    // keeps HlsService/HlsConverter out of lite AOT binaries via tree-shaking),
+    // so "services present" == "FFmpeg build" while this branch stays testable
+    // with injected fakes.
+    if (!hlsAvailable) {
+      hooks.skipped('Skipped: $filename (HLS video — requires FFmpeg build)');
+      return _SinglePinHlsOutcome.skipped;
+    }
+
+    // Skip-existing gate FIRST (overwrite=false), mirroring both the regular
+    // download path (`downloadFile` throws 'File already exists') and the feed
+    // HLS loop: without it a re-run would convert the whole playlist only to
+    // let MediaStore auto-rename the duplicate.
+    if (!overwrite) {
+      final exists =
+          await downloadService.fileExistsInDownloads(filename, videosFolder);
+      if (exists) {
+        hooks.skipped('Skipped: $filename (exists)');
+        return _SinglePinHlsOutcome.skipped;
+      }
+    }
+
+    try {
+      hooks.downloading('HLS video: fetching playlist...');
+      final parsed = await hlsService!.fetchAndParse(videoUrl);
+      if (!parsed.success) {
+        throw Exception('HLS parse failed: ${parsed.errorMessage}');
+      }
+      hooks.parse(
+          'HLS variant: ${parsed.width}x${parsed.height} @ ${parsed.bandwidth ?? 0} bps');
+
+      hooks.downloading('Converting HLS -> MP4...');
+      final conversion = await hlsConverter!.convertToMp4(
+        videoM3u8Url: parsed.videoVariantUrl!,
+        audioM3u8Url: parsed.audioUrl,
+        outputFilename: filename,
+        onLog: hooks.onFfmpegLog,
+        cancelToken: cancelToken,
+      );
+
+      if (!conversion.success) {
+        if (conversion.wasCancelled) {
+          hooks.interrupted('HLS conversion cancelled: $filename');
+          return _SinglePinHlsOutcome.cancelled;
+        }
+        throw Exception('FFmpeg conversion failed: ${conversion.errorMessage}');
+      }
+
+      final saved = await downloadService.saveFileToDownloads(
+        conversion.outputPath!,
+        filename,
+        videosFolder,
+        overwrite: overwrite,
+      );
+      if (saved == null) {
+        throw Exception('Failed to save converted file to Downloads');
+      }
+      hooks.saved('Saved: $filename');
+      hooks.onHistory(filename: filename, url: videoUrl, success: true);
+      return _SinglePinHlsOutcome.saved;
+    } catch (e) {
+      if (e is CancelledException) {
+        hooks.interrupted('Cancelled: $filename');
+        return _SinglePinHlsOutcome.cancelled;
+      }
+      hooks.failed('HLS failed: $filename - $e');
+      hooks.onHistory(
+        filename: filename,
+        url: videoUrl,
+        success: false,
+        errorMessage: hooks.mapError(e),
+      );
+      return _SinglePinHlsOutcome.failed;
+    }
   }
 
   /// Runs the feed download (regular queue first, then HLS by flavor).

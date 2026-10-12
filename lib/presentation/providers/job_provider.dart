@@ -7,7 +7,6 @@ import '../../core/config/build_config.dart';
 import '../../core/exceptions/pinterest_exception.dart';
 import '../../core/persistence/board_resume.dart';
 import '../../core/persistence/metadata_schema.dart';
-import '../../core/utils/format_utils.dart';
 import '../../core/utils/pin_url_validator.dart';
 import '../../data/models/author.dart';
 import '../../data/models/board.dart';
@@ -1239,9 +1238,15 @@ class JobNotifier extends StateNotifier<AppJobState> {
 
     _logService.queue('Starting download queue');
 
-    // Persist download state for background recovery
-    final totalToDownload = state.singlePinResult != null
-        ? (downloadImage ? 1 : 0) + (downloadVideo && state.singlePinResult!.hasVideoContent ? 1 : 0)
+    // Persist download state for background recovery.
+    // 3.1.1: a carousel is one item per slide (matching what is downloaded).
+    final single = state.singlePinResult;
+    final singleImageItems = single == null || !downloadImage || !single.hasImage
+        ? 0
+        : (single.slots.length > 1 ? single.slots.length : 1);
+    final totalToDownload = single != null
+        ? singleImageItems +
+            (downloadVideo && single.hasVideoContent ? 1 : 0)
         : state.pins.length;
     _persistDownloadState(mediaType, overwrite, saveMetadata, totalToDownload);
 
@@ -1344,8 +1349,11 @@ class JobNotifier extends StateNotifier<AppJobState> {
   }
 
   /// Single-pin download flow (no queue): image/thumbnail or carousel slots,
-  /// then video; per-item counting and history. Phase 08: kept provider-side
-  /// (it touches only DownloadService + _saveMetadata), slimmed of queue logic.
+  /// then video; per-item counting and history.
+  ///
+  /// 3.1.1: the strategy (including the HLS decision the flow used to lack)
+  /// lives in [DownloadCoordinator.runSinglePinDownload]; this method stays the
+  /// state adapter + metadata writer (channel access stays provider-side, G2).
   Future<void> _downloadSinglePin(
     String outputPath,
     bool overwrite, {
@@ -1354,106 +1362,14 @@ class JobNotifier extends StateNotifier<AppJobState> {
     required bool saveMetadata,
   }) async {
     final result = state.singlePinResult!;
-    int downloaded = 0;
-    int skipped = 0;
-    int failed = 0;
 
-    Future<void> downloadOne({
-      required String url,
-      required String filename,
-      required String pinId,
-    }) async {
-      _logService.downloading('Downloading $filename');
-      try {
-        await _downloadService.downloadFile(
-          url: url,
-          outputPath: outputPath,
-          filename: filename,
-          pinId: pinId,
-          overwrite: overwrite,
-        );
-        _logService.saved('Saved: $filename');
-        downloaded++;
-        _onDownloadComplete?.call(
-          filename: filename,
-          url: url,
-          status: HistoryStatus.success,
-        );
-      } on DownloadException catch (e) {
-        if (e.message.contains('already exists')) {
-          _logService.skipped('Skipped: $filename (exists)');
-          skipped++;
-        } else {
-          _logService.error('Failed: $filename - ${e.message}');
-          failed++;
-          _onDownloadComplete?.call(
-            filename: filename,
-            url: url,
-            status: HistoryStatus.failed,
-            errorMessage: e.message,
-          );
-        }
-      } catch (e) {
-        _logService.error('Failed: $filename - $e');
-        failed++;
-        _onDownloadComplete?.call(
-          filename: filename,
-          url: url,
-          status: HistoryStatus.failed,
-          errorMessage: userMessage(e),
-        );
-      }
-    }
-
-    // Download thumbnail/image if requested
-    if (downloadImage) {
-      // Phase 07 (07.3): carousel pins yield one download per slot, in slot
-      // order, with deterministic indexed names (<pinId>_image_<n>.<ext>,
-      // 1-based). Each slot is an independent history entry with its own
-      // failed/skip counting; skip-existing covers re-runs (names stable).
-      if (result.slots.length > 1) {
-        for (var i = 0; i < result.slots.length; i++) {
-          final slotUrl = result.slots[i].imageUrl;
-          final filename = FormatUtils.pinFilename(
-            pinId: result.pinId,
-            role: 'image',
-            url: slotUrl,
-            imageIndex: i + 1,
-          );
-          await downloadOne(
-            url: slotUrl,
-            filename: filename,
-            pinId: '${result.pinId}_img$i',
-          );
-        }
-      } else {
-        final imageUrl = result.getImageDownloadUrl(useThumbnailForVideo: true);
-        if (imageUrl != null) {
-          // Deterministic filename: <pinId>_image.jpg or <pinId>_thumbnail.jpg
-          final role = (result.hasVideoContent && !result.hasImage) ? 'thumbnail' : 'image';
-          final filename = FormatUtils.pinFilename(pinId: result.pinId, role: role, url: imageUrl);
-          await downloadOne(
-            url: imageUrl,
-            filename: filename,
-            pinId: '${result.pinId}_img',
-          );
-        }
-      }
-    }
-
-    // Download video if requested
-    if (downloadVideo && result.hasVideoContent) {
-      final videoUrl = result.videoUrl;
-      if (videoUrl != null) {
-        // Deterministic filename: <pinId>_video.mp4
-        final filename = FormatUtils.pinFilename(pinId: result.pinId, role: 'video', url: videoUrl);
-        await downloadOne(
-          url: videoUrl,
-          filename: filename,
-          pinId: '${result.pinId}_vid',
-        );
-      }
-    }
+    final run = await _download.runSinglePinDownload(
+      result: result,
+      outputPath: outputPath,
+      overwrite: overwrite,
+      downloadImage: downloadImage,
+      downloadVideo: downloadVideo,
+    );
 
     // Save metadata if requested (single pin goes to PinDL/metadata/)
     if (saveMetadata && result.rawJson != null) {
@@ -1462,9 +1378,9 @@ class JobNotifier extends StateNotifier<AppJobState> {
 
     state = state.copyWith(
       status: JobStatus.completed,
-      downloadedCount: downloaded,
-      skippedCount: skipped,
-      failedCount: failed,
+      downloadedCount: run.downloaded,
+      skippedCount: run.skipped,
+      failedCount: run.failed,
       imagesFullyDownloaded: downloadImage
           ? true
           : state.imagesFullyDownloaded,
@@ -1473,7 +1389,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
           : state.videosFullyDownloaded,
     );
 
-    _logService.complete('Download complete. Downloaded: $downloaded, Skipped: $skipped, Failed: $failed');
+    _logService.complete('Download complete. Downloaded: ${run.downloaded}, Skipped: ${run.skipped}, Failed: ${run.failed}');
   }
 
 

@@ -140,4 +140,77 @@ void main() {
       expect(r.ok, isTrue);
     });
   });
+
+  // ── 3.1.1: an HLS playlist is a text manifest, never an imported media file.
+  // Device report: a 920 B file whose content is the master playlist was saved
+  // as `<pinId>_video.mp4` with no error shown, because the tolerant-video rule
+  // blessed the unknown signature. Evidence + fix: reports/3.1.1-device-bugfix.md.
+  group('validateDownloaded — HLS playlist bodies are rejected', () {
+    const hlsMaster = '#EXTM3U\n'
+        '#EXT-X-VERSION:6\n'
+        '#EXT-X-STREAM-INF:BANDWIDTH=277080,RESOLUTION=240x240\n'
+        '4216b2353d83ddb92380d54c322343c8_240w.m3u8\n';
+    final hlsHead = Uint8List.fromList(hlsMaster.codeUnits);
+
+    test('isHlsPlaylist detects the marker (BOM + leading whitespace too)', () {
+      expect(MagicBytes.isHlsPlaylist(hlsHead), isTrue);
+      expect(
+        MagicBytes.isHlsPlaylist(Uint8List.fromList(
+            [0xEF, 0xBB, 0xBF, ...'#EXTM3U\n'.codeUnits])),
+        isTrue,
+      );
+      expect(
+        MagicBytes.isHlsPlaylist(Uint8List.fromList('\n  #EXTM3U\n'.codeUnits)),
+        isTrue,
+      );
+      expect(MagicBytes.isHlsPlaylist(Uint8List.fromList([0, 0, 0, 0])), isFalse);
+    });
+
+    test('an m3u8 body FAILS as a video (the corrupt-mp4 killer)', () {
+      final r = MediaValidator.validateDownloaded(
+        head: hlsHead,
+        size: 920,
+        expect: MediaExpectation.video,
+      );
+      expect(r.ok, isFalse);
+      expect(r.reason, contains('HLS playlist'));
+    });
+
+    test('an m3u8 body FAILS as an image too', () {
+      final r = MediaValidator.validateDownloaded(
+        head: hlsHead,
+        size: 920,
+        expect: MediaExpectation.image,
+      );
+      expect(r.ok, isFalse);
+    });
+
+    test('plain m3u8-bomb (extension-less) is rejected as text', () {
+      final r = MediaValidator.validateDownloaded(
+        head: head('#EXTINF:10,\nsegment-1.ts\n'.codeUnits),
+        size: 4096,
+        expect: MediaExpectation.video,
+      );
+      expect(r.ok, isFalse);
+      expect(r.reason, contains('text'));
+    });
+
+    test('a JSON/XML error payload is rejected as text for video', () {
+      final r = MediaValidator.validateDownloaded(
+        head: head('<Error><Code>AccessDenied</Code></Error>'.codeUnits),
+        size: 4096,
+        expect: MediaExpectation.video,
+      );
+      expect(r.ok, isFalse);
+    });
+
+    test('unknown BINARY bodies stay tolerated for video (regression guard)', () {
+      final r = MediaValidator.validateDownloaded(
+        head: head([0x01, 0x02, 0x03, 0x04, 0x00, 0xFF, 0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+        size: 4096,
+        expect: MediaExpectation.video,
+      );
+      expect(r.ok, isTrue);
+    });
+  });
 }

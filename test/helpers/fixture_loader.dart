@@ -26,6 +26,14 @@ class Fixtures {
   static String pinFlatImages() => _load('html/pin_flat_images.html');
   static String pinCarousel() => _load('html/pin_carousel.html');
 
+  // 3.1.1 live-shape fixtures (see reports/3.1.1-device-bugfix.md)
+  static String pinMultiRecordHlsThenMp4() =>
+      _load('html/pin_multi_record_hls_then_mp4.html');
+  static String pinFlat60x60First() =>
+      _load('html/pin_flat_60x60_first.html');
+  static String pinVideoLaterPage() =>
+      _load('html/pin_video_later_page.html');
+
   // API fixtures
   static Map<String, dynamic> userPinsPage1() =>
       jsonDecode(_load('api/user_pins_page1.json')) as Map<String, dynamic>;

@@ -70,6 +70,7 @@ class RangeResume {
         sidecarFile: sidecarFile,
         cancelToken: cancelToken,
         onProgress: onProgress,
+        onLog: onLog,
       );
       return;
     }
@@ -128,6 +129,7 @@ class RangeResume {
           sidecarFile: sidecarFile,
           cancelToken: cancelToken,
           onProgress: onProgress,
+          onLog: onLog,
         );
         return;
 
@@ -170,6 +172,7 @@ class RangeResume {
     required String sidecarFile,
     CancelToken? cancelToken,
     void Function(int received, int total)? onProgress,
+    void Function(String message)? onLog,
   }) async {
     final headers = <String, String>{
       if (startFrom > 0) 'Range': 'bytes=$startFrom-',
@@ -208,6 +211,7 @@ class RangeResume {
       sidecarFile: sidecarFile,
       cancelToken: cancelToken,
       onProgress: onProgress,
+      onLog: onLog,
     );
   }
 
@@ -233,6 +237,7 @@ class RangeResume {
       sidecarFile: sidecarFile,
       cancelToken: cancelToken,
       onProgress: onProgress,
+      onLog: onLog,
     );
   }
 
@@ -251,6 +256,7 @@ class RangeResume {
     required String sidecarFile,
     CancelToken? cancelToken,
     void Function(int received, int total)? onProgress,
+    void Function(String message)? onLog,
   }) async {
     final sink = part.openWrite(mode: FileMode.append);
     var written = startFrom;
@@ -290,14 +296,28 @@ class RangeResume {
       } catch (_) {}
       rethrow;
     }
-    // Final reconcile: the stream ended but the file must equal the total.
-    if (total > 0 && written != total) {
-      // Short body: same anomaly rule — the caller retries; the sidecar now
-      // marks an incomplete state that resumes or restarts safely.
+    // Final reconcile.
+    //
+    // UNDER-shoot (fewer bytes than declared): the transfer is genuinely
+    // incomplete — throw so the caller's retry layer re-runs it; the sidecar
+    // marks a resumable state.
+    if (total > 0 && written < total) {
       throw DioException.connectionError(
         reason: 'short body: got $written of $total bytes',
         requestOptions: RequestOptions(path: part.path),
       );
+    }
+    // OVER-shoot (more bytes than declared): the declared total is WRONG, not
+    // the body (compressed transfer or misreported Content-Length). Real device
+    // report: `short body: got 920 of 350 bytes` for a 920 B playlist whose CDN
+    // header claimed 350 B — the sidecar then stored the bogus total, so every
+    // retry failed identically and the item could never complete ("cannot be
+    // solved by the library"). Accept the delivered bytes: they are a verified
+    // 206 continuation (or a from-zero write), and the fail-closed media
+    // validator still inspects the actual content before import.
+    if (total > 0 && written > total) {
+      onLog?.call('declared length $total contradicted by $written bytes '
+          'received — treating declared length as unreliable');
     }
     // Completed (total reached): the sidecar has served its purpose and dies
     // here — the caller renames the part right after.
@@ -329,6 +349,13 @@ class RangeResume {
       override ?? '$partPath.meta.json';
 
   static int _totalFrom(Response<ResponseBody> resp) {
+    // A compressed response's Content-Length describes the WIRE body, not the
+    // decoded bytes the stream yields — unusable as a completion total (3.1.1).
+    final encoding =
+        resp.headers.value('content-encoding')?.toLowerCase().trim();
+    if (encoding != null && encoding.isNotEmpty && encoding != 'identity') {
+      return -1;
+    }
     final range = ContentRangeInfo.tryParse(resp.headers.value('content-range'));
     if (range != null) return range.total;
     final cl = resp.headers.value('content-length');
