@@ -40,8 +40,14 @@ Not sure? Choose **arm64-v8a**.
   rejected for both images and videos.
 - **“No data on pin page” for public pins.** Pin-page extraction now retries across the known
   hosts, bounded, and only reports the failure after the whole plan is exhausted.
+- **Video pins that showed up as images only.** Some video pins were listed — and saved — as just
+  the image, because the app looked for the video in only one of the places a pin page can carry it.
+  Those pins now download their video (usually the direct 720p MP4).
 - **Video pins pick the best rendition**, including when the pin page offers several records where
   only some carry a direct MP4.
+- **“Verbose logs” now actually adds detail.** The option previously changed nothing in the console.
+  It now adds request/response detail and a decision trace — which pages were tried, what each
+  returned, and which image/video was chosen — while errors and warnings stay visible either way.
 - **Images download at full resolution.** Renditions are ranked by resolution instead of server
   key order, and a thumbnail-sized URL is rewritten to the full-resolution `/originals/` image.
 - **Carousel (multi-image) pins download every slide — in your profile feed and in boards too.**
@@ -51,7 +57,8 @@ Not sure? Choose **arm64-v8a**.
   resumes without re-downloading finished slides or skipping missing ones.
 - **The preview’s speaker badge is a real mute/unmute toggle** (it was a static icon).
 - **The console is selectable and has “copy all logs”**, and it opens with a line stating whether
-  this build can convert HLS — so a wrong APK variant is visible instead of silent.
+  this build can convert HLS — so a wrong APK variant is visible instead of silent. Turn on
+  **Verbose logs** in the options for request/response detail and an extraction decision trace.
 
 ### Also in this release
 

@@ -273,6 +273,7 @@ extension _HomePageResults on _HomePageState {
                         mediaType: settings.mediaType,
                         maxPages: settings.maxPages,
                         saveMetadata: settings.saveMetadata,
+                        verbose: settings.verbose,
                       );
                 },
                 icon: const Icon(Icons.download_for_offline_outlined, size: 16),
@@ -352,6 +353,7 @@ extension _HomePageResults on _HomePageState {
                               downloadImage: settings.downloadImage,
                               downloadVideo: settings.downloadVideo,
                               saveMetadata: settings.saveMetadata,
+                              verbose: settings.verbose,
                             );
                       }
                     : null,
@@ -526,6 +528,7 @@ extension _HomePageResults on _HomePageState {
                       username: PinUrlValidator.normalizeUsername(
                           _inputController.text),
                       saveMetadata: settings.saveMetadata,
+                      verbose: settings.verbose,
                     )
                 : null,
           ),

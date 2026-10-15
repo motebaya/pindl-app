@@ -34,6 +34,16 @@ class Fixtures {
   static String pinVideoLaterPage() =>
       _load('html/pin_video_later_page.html');
 
+  // 3.1.1+8 live-shape fixtures (record-level `videos` node and the SSR
+  // INITIAL_PROPS pin object — the two video sources the relay-only resolver
+  // missed). See reports/3.1.1-device-bugfix.md.
+  static String pinVideosNodeCamel() =>
+      _load('html/pin_videos_node_camel.html');
+  static String pinVideosNodeCamelHlsOnly() =>
+      _load('html/pin_videos_node_camel_hls_only.html');
+  static String pinStubRelayPropsVideo() =>
+      _load('html/pin_stub_relay_props_video.html');
+
   // API fixtures
   static Map<String, dynamic> userPinsPage1() =>
       jsonDecode(_load('api/user_pins_page1.json')) as Map<String, dynamic>;

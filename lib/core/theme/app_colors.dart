@@ -45,6 +45,9 @@ class AppColors {
   static const Color consoleFetch = Color(0xFF2196F3);
   static const Color consoleParse = Color(0xFF3F51B5);
   static const Color consoleQueue = Color(0xFFFF9800);
+  /// Grey, and only ever visible while "Verbose logs" is enabled (3.1.1+8) —
+  /// the documented `Debug | Gray` console contract.
+  static const Color consoleDebug = Color(0xFF9E9E9E);
   static const Color consoleDownloading = Color(0xFFFFC107);
   static const Color consoleSaved = Color(0xFF4CAF50);
   static const Color consoleSkipped = Color(0xFFCDDC39);

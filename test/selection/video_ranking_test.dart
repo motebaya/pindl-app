@@ -126,6 +126,56 @@ void main() {
     });
   });
 
+  group('rendition key canonicalization (3.1.1+8)', () {
+    test('camelCase keys normalize to the V_ convention', () {
+      expect(canonicalVideoRenditionKey('v720P'), 'V_720P');
+      expect(canonicalVideoRenditionKey('v480P'), 'V_480P');
+      expect(canonicalVideoRenditionKey('vHLSV4'), 'V_HLSV4');
+      expect(canonicalVideoRenditionKey('vHLSV3MOBILE'), 'V_HLSV3_MOBILE');
+      expect(canonicalVideoRenditionKey('vHLSV3_MOBILE'), 'V_HLSV3_MOBILE');
+      expect(canonicalVideoRenditionKey('vEXP'), 'V_EXP');
+    });
+
+    test('canonical keys and non-rendition keys pass through unchanged', () {
+      for (final key in [...mp4Preference, ...hlsPreference, 'V_EXP']) {
+        expect(canonicalVideoRenditionKey(key), key);
+      }
+      expect(canonicalVideoRenditionKey('__typename'), '__typename');
+    });
+
+    test('a camelCase videos node ranks like its V_ twin', () {
+      final camel = videoListFromVideosNode({
+        'videoList': {
+          'vHLSV3MOBILE': {'url': 'https://v1.pinimg.com/hls3.m3u8'},
+          'vHLSV4': {'url': 'https://v1.pinimg.com/hls4.m3u8'},
+          'v720P': {'url': 'https://v1.pinimg.com/720.mp4'},
+          '__typename': 'VideoList',
+        },
+      });
+      expect(camel!.keys,
+          containsAll(['V_720P', 'V_HLSV4', 'V_HLSV3_MOBILE', '__typename']));
+      final pick = selectVideo(camel);
+      expect(pick!.url, 'https://v1.pinimg.com/720.mp4');
+      expect(pick.quality, '720P');
+      expect(pick.needConvert, isFalse);
+    });
+
+    test('the snake video_list spelling still resolves as before', () {
+      final pick = selectVideo(videoListFromVideosNode({
+        'video_list': {'V_720P': {'url': 'https://v1.pinimg.com/720.mp4'}},
+      }));
+      expect(pick!.url, 'https://v1.pinimg.com/720.mp4');
+    });
+
+    test('no-video shapes yield null', () {
+      expect(videoListFromVideosNode(null), isNull);
+      expect(videoListFromVideosNode({}), isNull);
+      expect(videoListFromVideosNode({'video_list': []}), isNull);
+      expect(videoListFromVideosNode({'videoList': null}), isNull);
+      expect(videoListFromVideosNode({'videoList': {}}), isNull);
+    });
+  });
+
   group('last resort', () {
     test('unknown container URL still downloads (needConvert per extension)',
         () {

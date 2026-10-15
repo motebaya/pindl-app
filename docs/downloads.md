@@ -36,7 +36,7 @@ Filenames are deterministic per pin, so re-downloading the same pin replaces the
 
 ## Video / HLS handling (ffmpeg variant)
 
-- Direct MP4 renditions are downloaded directly; the app picks the best available quality for pins offering multiple renditions.
+- Direct MP4 renditions are downloaded directly; the app picks the best available quality for pins offering multiple renditions, and finds the video wherever the pin page exposes it (several response records, the record's own `videos` list, or the pin data embedded in the page).
 - HLS streams (`.m3u8`) are parsed (master playlist → best video+audio variant) and remuxed into a single `.mp4` using stream copy. Output is validated (duration/structure) before it counts as downloaded, and conversions can be cancelled — a cancelled conversion is re-offered, not marked failed.
 - Temporary conversion files older than 24 hours are swept on the next conversion; the current session's temp file is removed on finish or cancel.
 - **lite variant:** HLS-only items are skipped with an explicit reason instead of failing mid-download.

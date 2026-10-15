@@ -28,10 +28,22 @@ this entry records the fixes.
   payload can never be imported as media.
 - **"No relay payload on pin page" (E_NO_DATA) on public pins**: the Pinterest pin page does not
   serve its data payload on every response. Extraction now retries across the known pin hosts
-  (bounded) and only reports E_NO_DATA after the whole plan is exhausted, naming the hosts tried.
+  (bounded) and only reports E_NO_DATA after the whole plan is exhausted, naming the hosts tried.- **Video pins reported as image-only**: the pin resolver read the video from one place only (the
+  story-pin blocks). Several reported pins carry `storyPinData: null` and expose their renditions
+  elsewhere — in the record-level `videos` list, or only in the pin data embedded in the page — so the
+  video was discarded and the image offered instead. Those sources are now read (rendition keys are
+  normalised, so ranking never depends on which spelling the server used), and a video present in the
+  page's embedded pin data is recovered even when the relay record is a media-less stub.
 - **Video quality on video pins**: a pin whose records offer both an HLS stream and a direct MP4 now
   yields the direct MP4 instead of the playlist rendition; every `videoDataV2` group in the record
   is considered, not just the first one found.
+- **"Verbose logs" had no effect on the console**: the option could not add anything — the log model
+  had no debug level at all, the diagnostics were written to the platform log instead of the in-app
+  console, the HTTP request/response interceptor was decided when the service was constructed (before
+  the option could ever be set), and the extractor was built without a console sink. Enabling it now
+  adds request/response detail plus an extraction decision trace (which pages were tried, what each
+  returned, which image/video rendition was chosen); with the option off the console is exactly as
+  concise as before, and no error, warning or progress line is ever hidden by it.
 - **Thumbnail-quality images (60×60 / 6 KB)**: image renditions are now ranked by resolution instead
   of server key order, and a thumbnail-sized Pinterest URL is rewritten to the full-resolution
   `/originals/` rendition before download.

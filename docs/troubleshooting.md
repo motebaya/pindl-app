@@ -52,6 +52,14 @@ Byte-range resume only continues when the server confirms the exact same file; i
 **Wrong or unexpected file for a pin**
 Since 3.1.1 the app prefers the best available rendition, so a pin can yield a different (better) file than older releases produced.
 
+## Reporting a problem
+
+**I need more detail than the console shows**
+Turn on **Verbose logs** in the options and repeat the action. The console then includes request/response
+detail and an extraction decision trace — which pages were tried, how many payloads each returned, and
+which image/video rendition was chosen — alongside the normal progress lines. The console header's
+copy-all button copies every line to the clipboard so you can paste it into a bug report.
+
 ## Boards
 
 **A board doesn't appear in "Find boards"**

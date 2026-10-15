@@ -22,9 +22,26 @@ import 'log_service.dart';
 /// Ported from Node.js Pinterest.js
 class PinterestExtractorService {
   final Dio _dio;
-  bool verbose;
+  bool _verbose;
   final CookieJar _cookieJar;
   final LogService? _logService;
+
+  /// Verbose diagnostics flag.
+  ///
+  /// 3.1.1+8 device report: "toggling verbose adds nothing to the console".
+  /// Part of the cause was here — the Dio request/response interceptor was
+  /// attached ONCE inside the constructor, while the flag was still at its
+  /// default `false`, so a later `verbose = true` (JobNotifier does exactly
+  /// that before every extraction) could never produce any API detail. Setting
+  /// the flag now attaches/detaches the interceptor too, and the intercepted
+  /// lines land in the in-app console through [LogService.debug] instead of
+  /// stdout (invisible on a release APK).
+  bool get verbose => _verbose;
+  set verbose(bool value) {
+    if (_verbose == value) return;
+    _verbose = value;
+    _syncVerboseInterceptor();
+  }
 
   /// Default max pages (can be overridden per request)
   static const int defaultMaxPages = 50;
@@ -40,9 +57,10 @@ class PinterestExtractorService {
 
   PinterestExtractorService({
     Dio? dio,
-    this.verbose = false,
+    bool verbose = false,
     LogService? logService,
-  })  : _cookieJar = CookieJar(),
+  })  : _verbose = verbose,
+        _cookieJar = CookieJar(),
         _logService = logService,
         _dio = dio ?? Dio() {
     _initializeDio();
@@ -57,6 +75,11 @@ class PinterestExtractorService {
 
   /// Host label for diagnostics (never throws on a malformed URL).
   static String _hostOf(String url) => Uri.tryParse(url)?.host ?? url;
+
+  /// True while verbose diagnostics are actually reaching the console. Used to
+  /// skip the work of BUILDING an expensive message (page preview, relay
+  /// payload count) when nothing would display it.
+  bool get _debugEnabled => _logService?.verbose ?? false;
 
   /// Username of the currently cached config, if any.
   String? get cachedUsername => _cachedUsername;
@@ -77,12 +100,31 @@ class PinterestExtractorService {
     // Add cookie manager - this persists cookies across requests like axios.create() does
     _dio.interceptors.add(CookieManager(_cookieJar));
 
-    if (verbose) {
-      _dio.interceptors.add(LogInterceptor(
+    _syncVerboseInterceptor();
+  }
+
+  /// The verbose API interceptor, while it is attached.
+  LogInterceptor? _verboseInterceptor;
+
+  /// Attaches the Dio request/response interceptor while [verbose] is on and
+  /// removes it when it goes off, so the flag is authoritative at any time
+  /// (3.1.1+8). Lines go to the console's debug level only — with verbose off
+  /// nothing is printed at all, keeping the normal-mode console concise.
+  void _syncVerboseInterceptor() {
+    if (_verbose) {
+      if (_verboseInterceptor != null) return;
+      final interceptor = LogInterceptor(
         requestBody: false,
         responseBody: false,
-        logPrint: (o) => print('[DIO] $o'),
-      ));
+        logPrint: (o) => _logService?.debug('[DIO] $o'),
+      );
+      _verboseInterceptor = interceptor;
+      _dio.interceptors.add(interceptor);
+    } else {
+      final interceptor = _verboseInterceptor;
+      if (interceptor == null) return;
+      _verboseInterceptor = null;
+      _dio.interceptors.remove(interceptor);
     }
   }
 
@@ -269,9 +311,9 @@ class PinterestExtractorService {
       // Check bookmark for next page (like Node.js line 219)
       // Node.js: if (page.bookmark !== undefined)
       if (nextBookmark != null && nextBookmark.isNotEmpty) {
-        if (verbose) {
-          print('[DEBUG] fetching next page -> $nextBookmark');
-        }
+        // Verbose-only, and on the console stream (was a stdout print, which
+        // a release-APK user can never see): 3.1.1+8.
+        _logService?.debug('fetching next page -> $nextBookmark');
         currentBookmark = nextBookmark;
       } else {
         // No more pages (like Node.js line 226-236)
@@ -372,12 +414,12 @@ class PinterestExtractorService {
         return null;
       }
 
-      // Debug: print first 200 chars
-      if (verbose) {
+      // Verbose-only response preview, routed to the console (3.1.1+8).
+      if (_debugEnabled) {
         final preview = response.data!.length > 200
             ? response.data!.substring(0, 200)
             : response.data!;
-        print('[DEBUG] Response preview: $preview');
+        _logService?.debug('Response preview: $preview');
       }
 
       // Parse JSON
@@ -613,6 +655,13 @@ class PinterestExtractorService {
         for (var round = 0; round < maxRelayAttempts; round++) ...candidates,
       ];
 
+      // Verbose decision trace (3.1.1+8): which pages are tried, what each one
+      // carried, and which representation was finally chosen. This is what
+      // turns "the console shows nothing" into a diagnosable report —
+      // especially for a video pin that comes back image-only.
+      _logService?.debug('single pin $pinId: ${plan.length} page attempt(s) '
+          'over ${candidates.length} host candidate(s)');
+
       PinParseOutcome? lastOutcome;
       final attempted = <String>[];
       for (var i = 0; i < plan.length; i++) {
@@ -628,6 +677,11 @@ class PinterestExtractorService {
           continue;
         }
         if (!attempted.contains(_hostOf(url))) attempted.add(_hostOf(url));
+        if (_debugEnabled) {
+          _logService?.debug('pin page ${_hostOf(url)} '
+              '(attempt ${i + 1}/${plan.length}): '
+              '${PinterestParser.parseRelayPayloads(html).length} relay payload(s)');
+        }
         final outcome = parse(html, pinId);
         if (!outcome.isSourceChanged) {
           if (i > 0) {
@@ -663,6 +717,10 @@ class PinterestExtractorService {
             'No $mediaNoun found for pin: $pinId',
             code: 'E_NO_MEDIA');
       }
+
+      _logService?.debug('selected media — image: ${result.imageUrl ?? 'none'}; '
+          'video: ${result.videoDownloadUrl ?? 'none'}'
+          '${result.hasVideoContent ? (result.videoIsHls ? ' (HLS, needs conversion)' : ' (direct MP4)') : ''}');
 
       return result;
     } on DioException catch (e) {

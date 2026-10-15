@@ -13,18 +13,19 @@ Practical contributor guide for building, testing, and releasing PinDL.
 ```bash
 flutter pub get          # dependencies
 flutter analyze          # static analysis — expected clean: 0 errors, 0 warnings
-flutter test             # unit suite (~309 tests) — fully offline, no device needed
+flutter test             # unit suite (~435 tests) — fully offline, no device needed
 ```
 
 The unit suite is deterministic: network calls are served by local static adapters, so it never touches the real network.
 
 ## Integration instruments (device only)
 
-The `integration_test/` folder contains device evidence instruments (channel smoke, resume cycle, boards end-to-end, a range-support probe) driven with `flutter drive` through `test_driver/integration_test.dart`. They are development instruments — they are not part of `flutter test` and do not gate CI. Run one, for example:
+The `integration_test/` folder contains device evidence instruments (channel smoke, resume cycle, boards end-to-end, a range-support probe, and an HLS → FFmpegKit probe) driven with `flutter drive` through `test_driver/integration_test.dart`. They are development instruments — they are not part of `flutter test` and do not gate CI. Run one, for example:
 
 ```bash
-flutter test integration_test/smoke_channels_test.dart \
-  --flavor lite --debug
+flutter drive --driver=test_driver/integration_test.dart \
+  -t integration_test/smoke_channels_test.dart \
+  --flavor lite --debug -d <device-or-emulator-id>
 ```
 
 The boards end-to-end instrument needs a live device/emulator with storage permissions pre-granted; see the comments at the top of each instrument file for their setup notes.
@@ -70,12 +71,12 @@ Releases are automated from CI (`.github/workflows/release-on-push.yml`):
    - creates and pushes the tag, then a GitHub Release whose body is `RELEASE_NOTES.md`, uploading the APKs from `dist/`.
 3. Tags are created by CI after successful builds — never tag releases manually, and never commit APKs.
 
-`RELEASE_NOTES.md` holds the current release only; `CHANGELOG.md` accumulates history; `releases/*.md` are archives of past bodies. Keep all three in that role.
+`RELEASE_NOTES.md` holds the current release only and becomes the GitHub Release body; `CHANGELOG.md` accumulates full history. Keep both in that role.
 
 A second workflow job runs the host suite plus a channels smoke on an API-30 emulator on every push to `main`; failure logs are retained for 14 days.
 
 ## Conventions
 
-- Analyzer-clean is the bar: no new warnings; production code does not call `print` (use the log service / debug prints as the surrounding code does).
+- Analyzer-clean is the bar: no new warnings and no new `print` calls in production code — the console log service is the normal sink (`LogService.debug` is the verbose-only level). A legacy set of `[INFO]`/`[WARN]`/`[ERROR]` prints in the extractor and download service still writes to the platform log; moving them onto the log service is tracked as hygiene work.
 - Tests are characterization-first: parser/selection/resume behavior is pinned by fixtures under `test/fixtures/`, so behavior changes show up as deliberate diffs.
 - Formatting: don't reformat unrelated code; keep diffs focused.

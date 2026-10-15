@@ -2,7 +2,11 @@ import 'dart:async';
 import '../../core/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 
-/// Log levels for the console
+/// Log levels for the console.
+///
+/// `debug` is the verbose-only level (3.1.1+8). Before it existed there was no
+/// level a debug line could even be filed under, so the "Verbose logs" toggle
+/// could not add anything to the console no matter what it was wired to.
 enum LogLevel {
   init,
   validate,
@@ -10,6 +14,7 @@ enum LogLevel {
   fetch,
   parse,
   queue,
+  debug,
   downloading,
   saved,
   skipped,
@@ -53,6 +58,8 @@ class LogEntry {
         return AppColors.consoleParse;
       case LogLevel.queue:
         return AppColors.consoleQueue;
+      case LogLevel.debug:
+        return AppColors.consoleDebug;
       case LogLevel.downloading:
         return AppColors.consoleDownloading;
       case LogLevel.saved:
@@ -83,7 +90,17 @@ class LogService {
   final List<LogEntry> _entries = [];
   final _controller = StreamController<LogEntry>.broadcast();
 
-  LogService({this.maxEntries = 500});
+  /// Verbose gate (3.1.1+8). Only [debug] entries are gated: every other level
+  /// is emitted unconditionally, so turning verbose OFF keeps the console
+  /// concise without hiding a single error, warning or progress line, and
+  /// turning it ON can only ever ADD lines.
+  ///
+  /// Set from the "Verbose logs" setting by the operation that starts the work
+  /// (JobNotifier.startExtraction/startDownload/startBoardDownload/
+  /// discoverBoards), the same way the extractor's own verbose flag is set.
+  bool verbose;
+
+  LogService({this.maxEntries = 500, this.verbose = false});
 
   /// Stream of log entries
   Stream<LogEntry> get stream => _controller.stream;
@@ -111,6 +128,13 @@ class LogService {
   void fetch(String message) => log(LogLevel.fetch, message);
   void parse(String message) => log(LogLevel.parse, message);
   void queue(String message) => log(LogLevel.queue, message);
+
+  /// Verbose-only diagnostic detail. Dropped entirely while [verbose] is off —
+  /// never queued, never streamed, never trimmed against [maxEntries].
+  void debug(String message) {
+    if (!verbose) return;
+    log(LogLevel.debug, message);
+  }
   void downloading(String message) => log(LogLevel.downloading, message);
   void saved(String message) => log(LogLevel.saved, message);
   void skipped(String message) => log(LogLevel.skipped, message);

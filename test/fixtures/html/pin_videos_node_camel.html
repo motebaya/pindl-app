@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<!-- Fixture (3.1.1+8): a single-pin relay record whose ONLY video source is the
+     record-level `videos` node, with camelCase rendition keys
+     (`videos.videoList.v720P`) and `storyPinData` null. This is the shape the
+     reported video pins (617837642698964831, 3025924747245513,
+     617837642701818224) were actually served: a resolver that reads only
+     `videoDataV2` reports the pin as image-only. Sanitized/synthetic URLs.
+     CAUTION: no sample relay call text in this comment — a commented example
+     would itself match the scan regex and poison results. -->
+<html>
+<head><title>relay videos node (camelCase)</title></head>
+<body>
+  <script>
+    window.__PWS_RELAY_REGISTER_COMPLETED_REQUEST__("pinterestapp:PinPage:closeup:5", {"data":{"pin_closeup":{"data":{"id":"1234567890123456789","entityId":"1234567890123456789","title":"Fixture Videos Node Camel","storyPinData":null,"videos":{"videoList":{"vHLSV3MOBILE":{"url":"https://v1.pinimg.com/videos/iht/hls/aa/bb/cc/fixture_mobile.m3u8","width":360,"height":640},"vHLSV4":{"url":"https://v1.pinimg.com/videos/iht/hls/aa/bb/cc/fixture_v4.m3u8","width":720,"height":1280},"v720P":{"url":"https://v1.pinimg.com/videos/iht/expMp4/aa/bb/cc/fixture720w.mp4","thumbnail":"https://i.pinimg.com/videos/thumbnails/originals/aa/bb/cc/fixturethumb.jpg","width":720,"height":1280,"duration":4033},"__typename":"VideoList"},"videoUrls":["https://v1.pinimg.com/videos/iht/expMp4/aa/bb/cc/fixture720w.mp4"],"node_id":"VmlkZW86MTIzNDU2Nzg5"},"images_736x":{"url":"https://i.pinimg.com/736x/aa/bb/cc/fixture736.jpg","width":736,"height":1104},"pinner":{"username":"fixtureuser","entityId":"9876543210987654321"},"closeupAttribution":{"fullName":"Fixture Author"}}}}}); 
+  </script>
+</body>
+</html>

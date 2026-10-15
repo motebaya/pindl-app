@@ -115,7 +115,7 @@ flowchart TD
 | Background downloads (foreground service) | ✅ |
 | Progress notifications with bar      | ✅     |
 | Completion notifications with sound  | ✅     |
-| In-app console: selectable logs, copy-all, HLS capability banner | ✅ |
+| In-app console: selectable logs, copy-all, HLS capability banner, Verbose-log detail | ✅ |
 | Resume interrupted downloads         | ✅     |
 | Cross-session progress accumulation  | ✅     |
 | Per-media-type continue mode         | ✅     |

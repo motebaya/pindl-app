@@ -157,6 +157,33 @@ class PinterestParser {
 
   /// Shape check: record carries a PinNotFound error object
   /// (JS parity: __isError/PIN_NOT_FOUND error records).
+  /// The pin object inside the SSR `__PWS_INITIAL_PROPS__` script
+  /// (`initialReduxState.pins[<pinId>]`), or null when absent/unparseable.
+  ///
+  /// 3.1.1+8 device QA: one reported pin (3025924747245513-style stub variant)
+  /// was served a media-less relay record — four keys, no `videos` — while the
+  /// very same response's INITIAL_PROPS carried the complete pin object with
+  /// its `videos.video_list`. The relay scan cannot see that object, so video
+  /// resolution consults it as a fallback ([_withInitialPropsVideo]).
+  static Map<String, dynamic>? initialPropsPinRecord(String html, String pinId) {
+    final match = _userId3Pattern.firstMatch(html);
+    if (match == null) return null;
+    try {
+      final jsonStr = match.group(1);
+      if (jsonStr == null) return null;
+      final json = jsonDecode(jsonStr);
+      if (json is! Map<String, dynamic>) return null;
+      final redux = json['initialReduxState'];
+      if (redux is! Map<String, dynamic>) return null;
+      final pins = redux['pins'];
+      if (pins is! Map<String, dynamic>) return null;
+      final record = pins[pinId];
+      return record is Map<String, dynamic> ? record : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   static bool _recordIsPinNotFoundRecord(Map<String, dynamic> record) {
     final error = record['error'];
     if (error is Map<String, dynamic>) {
@@ -254,15 +281,21 @@ class PinterestParser {
     return _bestImageFromFlatMaps(record);
   }
 
-  /// Resolve the record's best video (JS chain): every `videoDataV2` group
-  /// found under `storyPinData.pages[*].blocks[*]` (plus the record-level key)
-  /// merged, then ranked by selectVideo (07.2) — so a direct MP4 anywhere in
-  /// the record wins over an HLS-only group (3.1.1 fix; see [_videoTier]).
+  /// Resolve the record's best video (JS chain): the record-level `videos`
+  /// node plus every `videoDataV2` group found under
+  /// `storyPinData.pages[*].blocks[*]` (and the record-level key) merged, then
+  /// ranked by selectVideo (07.2) — so a direct MP4 anywhere in the record wins
+  /// over an HLS-only group (3.1.1 fix; see [_mediaScore]).
   /// Null when the record carries no rendition with a URL.
+  ///
+  /// 3.1.1+8 device QA: the relay records of the reported video pins carry
+  /// `storyPinData == null` and keep their renditions ONLY in `videos`
+  /// (`videos.videoList` camelCase, or `videos.video_list` snake in SSR
+  /// INITIAL_PROPS). Reading just `videoDataV2` threw those renditions away and
+  /// the pins were reported as image-only. See reports/3.1.1-device-bugfix.md.
   static VideoUrl? _resolveVideo(Map<String, dynamic> record) {
     final merged = <String, dynamic>{};
-    void mergeFrom(Map<String, dynamic>? v2) {
-      final list = videoListFromVideoDataV2(v2);
+    void mergeList(Map<String, dynamic>? list) {
       if (list == null) return;
       list.forEach((key, value) {
         if (value is! Map<String, dynamic>) return;
@@ -276,6 +309,15 @@ class PinterestParser {
         merged[key] = value;
       });
     }
+
+    void mergeFrom(Map<String, dynamic>? v2) =>
+        mergeList(videoListFromVideoDataV2(v2));
+
+    // Safe cast: the node is a list (an empty array) on "no video" records.
+    final videosNode = record['videos'];
+    mergeList(videosNode is Map<String, dynamic>
+        ? videoListFromVideosNode(videosNode)
+        : null);
 
     final storyPinData = record['storyPinData'] as Map<String, dynamic>?;
     final pages = storyPinData?['pages'] as List<dynamic>?;
@@ -371,6 +413,33 @@ class PinterestParser {
     return false;
   }
 
+  /// Video-only fallback over the SSR INITIAL_PROPS pin object (3.1.1+8).
+  ///
+  /// When the relay-derived result carries no video, the props object is the
+  /// only place the rendition set may live (stub-record variant). The fallback
+  /// is deliberately VIDEO-ONLY: when the relay scan already produced a result,
+  /// its image/title/author selection is preserved untouched (no image-quality
+  /// behavior change), and when no relay record carried media at all the props
+  /// object is parsed in full. The result is unchanged when neither source
+  /// carries a video.
+  static MediaResult? _withInitialPropsVideo(
+      MediaResult? best, String html, String pinId) {
+    if (best != null && best.hasVideoContent) return best;
+    final props = initialPropsPinRecord(html, pinId);
+    if (props == null) return best;
+    final video = _resolveVideo(props);
+    if (video == null) return best;
+    if (best == null) return _mediaFromRecord(props, pinId);
+    return best.copyWith(
+      videoUrl: video.url,
+      videoNeedConvert: video.needConvert,
+      thumbnail: video.thumbnail,
+      isVideo: true,
+      hasVideoContent: true,
+      message: 'video found for -> $pinId',
+    );
+  }
+
   /// Full media extraction from one record (JS mediaFromPinRecord port).
   /// Null when the record carries neither image, video, nor carousel slots.
   static MediaResult? _mediaFromRecord(
@@ -461,7 +530,7 @@ class PinterestParser {
         bestScore = score;
       }
     }
-    return best;
+    return _withInitialPropsVideo(best, html, pinId);
   }
 
   /// Classified single-pin parsing (Phase 03 / extraction plan 01):
@@ -522,6 +591,6 @@ class PinterestParser {
         bestScore = score;
       }
     }
-    return best;
+    return _withInitialPropsVideo(best, html, pinId);
   }
 }

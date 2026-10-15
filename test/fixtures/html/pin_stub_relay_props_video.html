@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<!-- Fixture (3.1.1+8): the stubborn variant of pin 617837642695441979 — the SSR
+     relay record is a four-key stub (topInterest / imageSignature /
+     images_736x / id, no `videos`, `storyPinData` absent) while the SAME
+     response's __PWS_INITIAL_PROPS__ carries the complete pin object with its
+     `videos.video_list`. The relay scan alone cannot see the video, so the
+     pin came back image-only. The props object is consulted as a video-only
+     fallback. Sanitized/synthetic URLs. -->
+<html>
+<head><title>stub relay record + props video</title></head>
+<body>
+  <script>
+    window.__PWS_RELAY_REGISTER_COMPLETED_REQUEST__("pinterestapp:PinPage:closeup:5", {"data":{"pin_closeup":{"data":{"id":"3456789012345678901","topInterest":"fixture-topic","imageSignature":"fixture-signature","images_736x":{"url":"https://i.pinimg.com/736x/aa/bb/cc/fixture736.jpg","width":736,"height":1104}}}}}); 
+  </script>
+  <script id="__PWS_INITIAL_PROPS__" type="application/json">{"initialReduxState":{"pins":{"3456789012345678901":{"id":"3456789012345678901","entityId":"3456789012345678901","title":"Fixture Props Video","images":{"orig":{"url":"https://i.pinimg.com/originals/aa/bb/cc/fixtureorig.jpg","width":1080,"height":1620}},"videos":{"video_list":{"V_HLSV4":{"url":"https://v1.pinimg.com/videos/iht/hls/aa/bb/cc/fixture_v4.m3u8","width":720,"height":1280},"V_720P":{"url":"https://v1.pinimg.com/videos/iht/expMp4/aa/bb/cc/fixture720w.mp4","thumbnail":"https://i.pinimg.com/videos/thumbnails/originals/aa/bb/cc/fixturethumb.jpg","width":720,"height":1280,"duration":4033}},"video_urls":["https://v1.pinimg.com/videos/iht/expMp4/aa/bb/cc/fixture720w.mp4"]},"pinner":{"username":"fixtureuser","entityId":"9876543210987654321"}}},"users":{"9876543210987654321":{"username":"fixtureuser","full_name":"Fixture Author"}}}}</script>
+</body>
+</html>

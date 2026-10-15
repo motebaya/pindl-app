@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<!-- Fixture (3.1.1+8): the same record-level `videos.videoList` node but with
+     HLS renditions ONLY (no progressive MP4). The pin must be flagged as
+     needing conversion — this is what gates the single-pin HLS branch — rather
+     than being treated as an image-only pin. See
+     reports/3.1.1-device-bugfix.md. -->
+<html>
+<head><title>relay videos node (camelCase, HLS only)</title></head>
+<body>
+  <script>
+    window.__PWS_RELAY_REGISTER_COMPLETED_REQUEST__("pinterestapp:PinPage:closeup:5", {"data":{"pin_closeup":{"data":{"id":"2345678901234567890","entityId":"2345678901234567890","title":"Fixture Videos Node HLS Only","storyPinData":null,"videos":{"videoList":{"vHLSV3MOBILE":{"url":"https://v1.pinimg.com/videos/iht/hls/aa/bb/cc/fixture_mobile.m3u8","width":360,"height":640},"vHLSV4":{"url":"https://v1.pinimg.com/videos/iht/hls/aa/bb/cc/fixture_v4.m3u8","width":720,"height":1280},"__typename":"VideoList"}},"images_736x":{"url":"https://i.pinimg.com/736x/aa/bb/cc/fixture736.jpg","width":736,"height":1104}},"pinner":{"username":"fixtureuser","entityId":"9876543210987654321"}}}}); 
+  </script>
+</body>
+</html>

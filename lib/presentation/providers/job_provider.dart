@@ -367,11 +367,15 @@ class JobNotifier extends StateNotifier<AppJobState> {
         interrupted: _logService.interrupted,
         complete: _logService.complete,
         onFfmpegLog: (log) {
-          // Only log important messages (not every frame)
+          // Only surface important messages (not every frame), and only as
+          // verbose detail — a raw FFmpeg stream is noise in the normal-mode
+          // console. This used to be a stdout print, invisible on a release
+          // APK (3.1.1+8). Conversion failures still emit an unconditional
+          // ERROR line via hooks.failed in the coordinator.
           if (log.contains('frame=') && log.contains('fps=')) {
             // Skip verbose frame logs
           } else if (log.isNotEmpty) {
-            print('[FFmpeg] $log');
+            _logService.debug('[FFmpeg] $log');
           }
         },
         onHistory: ({required filename, required url, required success, errorMessage}) {
@@ -413,8 +417,12 @@ class JobNotifier extends StateNotifier<AppJobState> {
     int maxPages = 50,
     bool verbose = false,
   }) async {
-    // Update the extractor's verbose flag with the latest setting
+    // Update the verbose configuration with the latest setting BEFORE any work
+    // starts: the extractor's flag (API interceptor) and the log service's
+    // gate (debug lines) must agree, or the console shows nothing extra even
+    // with the checkbox on (3.1.1+8).
     _extractor.verbose = verbose;
+    _logService.verbose = verbose;
 
     // Validate we can start extraction
     if (state.isExtracting || state.isDownloading) {
@@ -601,7 +609,10 @@ class JobNotifier extends StateNotifier<AppJobState> {
     required MediaType mediaType,
     int maxPages = 50,
     bool saveMetadata = false,
+    bool verbose = false,
   }) async {
+    _extractor.verbose = verbose;
+    _logService.verbose = verbose;
     final stored = state.bookmarkContext;
     final token = state.nextBookmark;
     if (stored == null || token == null) return;
@@ -626,6 +637,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
         mediaType: mediaType,
         saveMetadata: saveMetadata,
         maxPages: maxPages,
+        verbose: verbose,
       );
       return;
     }
@@ -732,6 +744,7 @@ class JobNotifier extends StateNotifier<AppJobState> {
     bool verbose = false,
   }) async {
     _extractor.verbose = verbose;
+    _logService.verbose = verbose;
     if (state.isExtracting || state.isDiscoveringBoards) {
       _logService.error('Cannot start board discovery: another operation in progress');
       return;
@@ -833,7 +846,10 @@ class JobNotifier extends StateNotifier<AppJobState> {
     required bool overwrite,
     required String username,
     bool saveMetadata = false,
+    bool verbose = false,
   }) async {
+    _extractor.verbose = verbose;
+    _logService.verbose = verbose;
     final selection = state.boardSelection;
     if (selection.isEmpty) {
       _logService.error('No boards selected');
@@ -1251,7 +1267,13 @@ class JobNotifier extends StateNotifier<AppJobState> {
     bool downloadImage = true,
     bool downloadVideo = false,
     bool saveMetadata = false,
+    bool verbose = false,
   }) async {
+    // The download leg can emit HLS/FFmpeg debug detail, so it honours the
+    // same verbose contract as extraction (3.1.1+8).
+    _extractor.verbose = verbose;
+    _logService.verbose = verbose;
+
     // Validate we're in the correct phase
     if (!state.canDownload) {
       _logService.error('Cannot start download: not in ready state');
@@ -1517,7 +1539,13 @@ class JobNotifier extends StateNotifier<AppJobState> {
 /// before each extraction, avoiding the Riverpod invalidation cascade that
 /// previously caused jobProvider to reset (destroying the result card).
 final pinterestExtractorProvider = Provider<PinterestExtractorService>((ref) {
-  final service = PinterestExtractorService();
+  // 3.1.1+8: the extractor is handed the SAME log service the console renders.
+  // It used to be constructed with no sink at all, so every diagnostic it
+  // produced (including the 3.1.1 "relay payload recovered" line) was dropped
+  // on the floor — the console could never show anything the extractor knew.
+  final service = PinterestExtractorService(
+    logService: ref.watch(logServiceProvider),
+  );
   ref.onDispose(() => service.dispose());
   return service;
 });

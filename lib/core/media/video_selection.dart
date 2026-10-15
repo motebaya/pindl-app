@@ -35,10 +35,57 @@ const List<String> hlsPreference = [
 /// a list (empty array) means "no video".
 typedef VideosNode = Map<String, dynamic>?;
 
+/// Canonicalizes a rendition key to the `V_` convention used by [selectVideo]'s
+/// preference lists, so ranking never depends on which spelling a response
+/// happens to use.
+///
+/// 3.1.1+8 device QA: single-pin relay records carry the keys in camelCase
+/// (`v720P`, `vHLSV4`, `vHLSV3MOBILE`) inside `videos.videoList` while feed rows
+/// and SSR INITIAL_PROPS use the `V_` form (`V_720P`, `V_HLSV4`,
+/// `V_HLSV3_MOBILE`). Without normalization a 720P progressive MP4 is only
+/// reachable through [selectVideo]'s map-order catch-all, which is not a
+/// deterministic choice (D-48).
+///
+/// Already-canonical keys (`V_*`), `v720P`, `vHLSV4`, `vHLSV3_MOBILE`,
+/// `vHLSV3MOBILE` and unknown keys such as `vEXP` all map predictably.
+String canonicalVideoRenditionKey(String key) {
+  if (key.startsWith('V_')) return key;
+  // Anything that is not a lower-case `v` rendition key keeps its spelling
+  // (`__typename` and other markers must not be renamed into pseudo-renditions).
+  if (!key.startsWith('v')) return key;
+  var rest = key.substring(1);
+  final mobile = RegExp(r'^HLSV(\d+)MOBILE$').firstMatch(rest);
+  if (mobile != null) rest = 'HLSV${mobile.group(1)}_MOBILE';
+  return 'V_$rest';
+}
+
+/// [canonicalVideoRenditionKey] applied to every key of a rendition map.
+Map<String, dynamic> canonicalizeVideoRenditionKeys(
+    Map<String, dynamic> renditions) {
+  final normalized = <String, dynamic>{};
+  renditions.forEach((key, value) {
+    normalized[canonicalVideoRenditionKey(key)] = value;
+  });
+  return normalized;
+}
+
 /// Extracts the rendition map from a record's `videos` node.
+///
+/// Accepts both observed spellings and returns them under canonical `V_` keys:
+///   * snake — feed rows and SSR INITIAL_PROPS: `{ "video_list": {"V_720P": …} }`
+///   * camel — single-pin relay records: `{ "videoList": {"v720P": …} }`
+/// The null form signals the story-pin fallback; a list (empty array) means
+/// "no video".
 Map<String, dynamic>? videoListFromVideosNode(VideosNode videos) {
-  if (videos is Map<String, dynamic> && videos.isNotEmpty) {
-    return videos['video_list'] as Map<String, dynamic>?;
+  if (videos is! Map<String, dynamic> || videos.isEmpty) return null;
+  final snake = videos['video_list'];
+  if (snake is Map<String, dynamic>) {
+    return snake.isEmpty ? null : snake;
+  }
+  final camel = videos['videoList'];
+  if (camel is Map<String, dynamic>) {
+    final normalized = canonicalizeVideoRenditionKeys(camel);
+    return normalized.isEmpty ? null : normalized;
   }
   return null;
 }
