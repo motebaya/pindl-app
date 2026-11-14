@@ -6,7 +6,7 @@ Practical contributor guide for building, testing, and releasing PinDL.
 
 - Flutter stable (Dart 3.10 — matches `pubspec.yaml` `environment.sdk`), Flutter 3.47.x is what releases are built with
 - Android SDK + JDK 17
-- A device or emulator (API 24+; CI smoke uses an API 30 emulator) only for the integration instruments
+- A device or emulator (API 24+) only for the integration instruments
 
 ## Daily commands
 
@@ -65,15 +65,16 @@ Releases are automated from CI (`.github/workflows/release-on-push.yml`):
 
 1. The version lives in `pubspec.yaml` as `X.Y.Z+N`. Before bumping, `git fetch --tags` and confirm the previous release tag exists locally.
 2. Push to `main` triggers the workflow, which:
-   - derives the tag `vX.Y.Z-bN` from the pubspec version and skips if that tag already exists,
-   - runs `flutter test` as a quality gate,
-   - builds all four APK sets (lite/ffmpeg × split-per-ABI/universal),
+   - derives the tag `vX.Y.Z-bN` from the pubspec version and skips if that **release** is already published (a run that tagged but never published is retried, reusing its tag),
+   - fails before building if any of the four signing secrets is missing, since a missing keystore silently falls back to debug signing,
+   - runs `flutter test` as the one host gate,
+   - builds all four APK sets (lite/ffmpeg × split-per-ABI/universal) and requires all eight artifacts,
    - creates and pushes the tag, then a GitHub Release whose body is `RELEASE_NOTES.md`, uploading the APKs from `dist/`.
 3. Tags are created by CI after successful builds — never tag releases manually, and never commit APKs.
 
 `RELEASE_NOTES.md` holds the current release only and becomes the GitHub Release body; `CHANGELOG.md` accumulates full history. Keep both in that role.
 
-A second workflow job runs the host suite plus a channels smoke on an API-30 emulator on every push to `main`; failure logs are retained for 14 days.
+CI does release automation only. Device-level validation (the `integration_test/` instruments, including the channels smoke) is run locally against a real device — see [the instruments section above](#integration-instruments-device-only) — and is never repeated in the workflow.
 
 ## Conventions
 

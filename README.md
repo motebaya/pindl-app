@@ -98,39 +98,39 @@ flowchart TD
 > [!IMPORTANT]
 > **Feature full Explanation & Demo**: [See Here](SHOWCASE.md)
 
-| Feature                              | Status |
-| ------------------------------------ | ------ |
-| Download from Pinterest username     | ✅     |
-| Download single pins via URL         | ✅     |
-| Download single pins via pin ID      | ✅     |
-| Board downloads with sections (Whole / Sections / Skip) | ✅ |
-| Short URL resolution (pin.it)        | ✅     |
-| Image download support               | ✅     |
-| Multi-image (carousel) pins — one indexed file per slide (`_image_1..n`) | ✅ |
-| Video download support (720p)        | ✅     |
-| HLS video conversion (FFmpeg build)  | ✅     |
-| Best-quality rendition selection (direct MP4 over HLS, images upgraded to `/originals/`) | ✅ |
-| Lite build: direct-MP4 videos; HLS-only videos require the FFmpeg build | ✅ |
-| Batch/bulk downloads                 | ✅     |
-| Background downloads (foreground service) | ✅ |
-| Progress notifications with bar      | ✅     |
-| Completion notifications with sound  | ✅     |
-| In-app console: selectable logs, copy-all, HLS capability banner, Verbose-log detail | ✅ |
-| Resume interrupted downloads         | ✅     |
-| Cross-session progress accumulation  | ✅     |
-| Per-media-type continue mode         | ✅     |
-| Task state persistence (Hive)        | ✅     |
-| Interrupted-task prompt on relaunch (Hive-backed) | ✅ |
-| Metadata saving (JSON)               | ✅     |
-| Skip existing files                  | ✅     |
-| Overwrite mode                       | ✅     |
-| Light theme                          | ✅     |
-| Dark theme                           | ✅     |
-| Download history                     | ✅     |
-| Extraction history                   | ✅     |
-| MediaStore integration (Android 10+) | ✅     |
-| Video preview playback               | ✅     |
-| Continue from last position          | ✅     |
+| Feature                                                                                  | Status |
+| ---------------------------------------------------------------------------------------- | ------ |
+| Download from Pinterest username                                                         | ✅     |
+| Download single pins via URL                                                             | ✅     |
+| Download single pins via pin ID                                                          | ✅     |
+| Board downloads with sections (Whole / Sections / Skip)                                  | ✅     |
+| Short URL resolution (pin.it)                                                            | ✅     |
+| Image download support                                                                   | ✅     |
+| Multi-image (carousel) pins — one indexed file per slide (`_image_1..n`)                 | ✅     |
+| Video download support (720p)                                                            | ✅     |
+| HLS video conversion (FFmpeg build)                                                      | ✅     |
+| Best-quality rendition selection (direct MP4 over HLS, images upgraded to `/originals/`) | ✅     |
+| Lite build: direct-MP4 videos; HLS-only videos require the FFmpeg build                  | ✅     |
+| Batch/bulk downloads                                                                     | ✅     |
+| Background downloads (foreground service)                                                | ✅     |
+| Progress notifications with bar                                                          | ✅     |
+| Completion notifications with sound                                                      | ✅     |
+| In-app console: selectable logs, copy-all, HLS capability banner, Verbose-log detail     | ✅     |
+| Resume interrupted downloads                                                             | ✅     |
+| Cross-session progress accumulation                                                      | ✅     |
+| Per-media-type continue mode                                                             | ✅     |
+| Task state persistence (Hive)                                                            | ✅     |
+| Interrupted-task prompt on relaunch (Hive-backed)                                        | ✅     |
+| Metadata saving (JSON)                                                                   | ✅     |
+| Skip existing files                                                                      | ✅     |
+| Overwrite mode                                                                           | ✅     |
+| Light theme                                                                              | ✅     |
+| Dark theme                                                                               | ✅     |
+| Download history                                                                         | ✅     |
+| Extraction history                                                                       | ✅     |
+| MediaStore integration (Android 10+)                                                     | ✅     |
+| Video preview playback                                                                   | ✅     |
+| Continue from last position                                                              | ✅     |
 
 ## Documentation
 
@@ -210,10 +210,12 @@ The debug APK will be at: `build/app/outputs/flutter-apk/app-debug.apk`
 ### Production/Release Build
 
 The app supports two build flavors:
+
 - **lite**: Minimal build without FFmpeg (smaller APK, no HLS conversion)
 - **ffmpeg**: Full build with FFmpeg support (HLS → MP4 conversion, includes `ffmpeg_kit_flutter_new_https`)
 
 And two ABI build modes:
+
 - **Standard**: Single APK with all ABIs (~larger file size)
 - **Split ABI**: Separate APKs per architecture (armeabi-v7a, arm64-v8a, x86, x86_64) for smaller file sizes
 
@@ -273,6 +275,7 @@ chmod +x build_prod.sh
 ```
 
 **Build Flavors:**
+
 - `lite`: no video format conversion (HLS-only videos require the ffmpeg flavor)
 - `ffmpeg`: includes FFmpeg for HLS → MP4 conversion
 - `all`: Builds both flavors
@@ -297,6 +300,7 @@ universal 59.0 MB, ffmpeg universal 136.0 MB, lite arm64 24.6 MB, ffmpeg
 arm64 43.9 MB. Every script build re-measures its own APKs in `dist/build.md`.
 
 **Split ABI Benefits:**
+
 - Reduces APK size by ~40-60% per architecture
 - Faster downloads and installation for end users
 - Google Play automatically serves the correct APK for each device
@@ -338,6 +342,7 @@ flutter build apk --flavor ffmpeg --dart-define=ENABLE_FFMPEG=true --release --s
 ```
 
 **Output locations:**
+
 - Standard build: `build/app/outputs/flutter-apk/app-{flavor}-release.apk`
 - Split ABI build: `build/app/outputs/flutter-apk/app-{flavor}-{abi}-release.apk`
 
@@ -367,12 +372,12 @@ The user metadata JSON is the authoritative resume record. It carries a
 `schema` version; v2 adds `completed_indices` — the set of item indices
 completed per the truth table below:
 
-| Outcome | Completion state | On continue |
-|---|---|---|
-| success | complete | not re-offered |
-| skipped (file exists) | complete | not re-offered |
-| failed | **incomplete (hole)** | **re-offered** |
-| cancelled | **incomplete (hole)** | **re-offered** |
+| Outcome               | Completion state      | On continue    |
+| --------------------- | --------------------- | -------------- |
+| success               | complete              | not re-offered |
+| skipped (file exists) | complete              | not re-offered |
+| failed                | **incomplete (hole)** | **re-offered** |
+| cancelled             | **incomplete (hole)** | **re-offered** |
 
 `last_index_downloaded` = `maxContiguous(completed_indices)` — every item at
 or before that index is definitively done; continue starts just after it and

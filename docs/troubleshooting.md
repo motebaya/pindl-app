@@ -5,7 +5,7 @@ _Applies to PinDL 3.1.1._
 ## Install problems
 
 **"App not installed" / install blocked**
-You are installing outside the Play Store. Allow *install unknown apps* for the browser or file manager you downloaded the APK with, then retry. Check that you picked an APK matching your device (arm64-v8a for most modern phones, armeabi-v7a for older 32-bit devices, universal if unsure) — see [Getting Started](getting-started.md).
+You are installing outside the Play Store. Allow _install unknown apps_ for the browser or file manager you downloaded the APK with, then retry. Check that you picked an APK matching your device (arm64-v8a for most modern phones, armeabi-v7a for older 32-bit devices, universal if unsure) — see [Getting Started](getting-started.md).
 
 **Updating the app**
 Install the new APK over the old one (same flavor). The signing key is consistent across releases, so updates install in place without uninstalling.
@@ -13,10 +13,10 @@ Install the new APK over the old one (same flavor). The signing key is consisten
 ## Permissions
 
 **Downloads don't start / nothing appears in Downloads**
-The app needs **All files access** to write into the public `Downloads` folder. Grant it when the app asks (the permission gate appears on first submit), or via Android *Settings → Apps → PinDL → Permissions*. If it still fails after granting, restart the app once.
+The app needs **All files access** to write into the public `Downloads` folder. Grant it when the app asks (the permission gate appears on first submit), or via Android _Settings → Apps → PinDL → Permissions_. If it still fails after granting, restart the app once.
 
 **No progress/completion notifications on Android 13+**
-The app asks for notification permission; if denied or revoked, downloads still work — only the alerts are missing. Re-enable via *Settings → Apps → PinDL → Notifications*.
+The app asks for notification permission; if denied or revoked, downloads still work — only the alerts are missing. Re-enable via _Settings → Apps → PinDL → Notifications_.
 
 ## Input and extraction
 

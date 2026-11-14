@@ -13,12 +13,12 @@ _Applies to PinDL 3.1.1._
 1. Open the [releases page](https://github.com/motebaya/pindl-app/releases) and download the APK for the latest release.
 2. Pick the right file:
 
-| Choice | Pick this | Notes |
-|---|---|---|
-| Most phones | `PinDL-lite-arm64-v8a-…apk` | Small, fast, recommended |
-| Older 32-bit phones | `…-armeabi-v7a-…apk` | |
-| Emulators | `…-x86_64-…apk` | |
-| Unsure / any device | `…-universal-…apk` | Largest |
+| Choice              | Pick this                   | Notes                    |
+| ------------------- | --------------------------- | ------------------------ |
+| Most phones         | `PinDL-lite-arm64-v8a-…apk` | Small, fast, recommended |
+| Older 32-bit phones | `…-armeabi-v7a-…apk`        |                          |
+| Emulators           | `…-x86_64-…apk`             |                          |
+| Unsure / any device | `…-universal-…apk`          | Largest                  |
 
    Two variants exist: **lite** (no video conversion) and **ffmpeg** (can convert HLS videos to MP4). See [Downloads](downloads.md) for what that means in practice.
 3. On first install, Android will warn about installing from outside the Play Store ("unknown sources" / install unknown apps). Allow it for your browser or file manager.

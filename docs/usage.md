@@ -4,12 +4,12 @@ _Applies to PinDL 3.1.1._
 
 ## What you can paste
 
-| Input | Behavior |
-|---|---|
-| Pin URL | Downloads that single pin |
-| Pin ID | Same as a pin URL |
-| `@username` (or plain username) | Bulk download of that profile's pins, paginated |
-| `pin.it/…` short link | Resolved automatically; pin links download, profile links fill the input with `@username` for you to submit |
+| Input                           | Behavior                                                                                                    |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Pin URL                         | Downloads that single pin                                                                                   |
+| Pin ID                          | Same as a pin URL                                                                                           |
+| `@username` (or plain username) | Bulk download of that profile's pins, paginated                                                             |
+| `pin.it/…` short link           | Resolved automatically; pin links download, profile links fill the input with `@username` for you to submit |
 
 Feed downloads are capped per run. When a cap is hit, a **Fetch more** button appears on the result card to continue from where extraction stopped (it reuses the stored cursor only when the request context still matches — otherwise it re-extracts from the first page).
 
