@@ -4,7 +4,7 @@ Practical contributor guide for building, testing, and releasing PinDL.
 
 ## Requirements
 
-- Flutter stable (Dart 3.10 — matches `pubspec.yaml` `environment.sdk`), Flutter 3.47.x is what releases are built with
+- **Flutter 3.47.5** (stable, Dart 3.13.4 — satisfies `pubspec.yaml` `environment.sdk` `^3.10.8`). Releases and CI are pinned to exactly this version — see [Release flow](#release-flow-maintainers)
 - Android SDK + JDK 17
 - A device or emulator (API 24+) only for the integration instruments
 
@@ -73,6 +73,8 @@ Releases are automated from CI (`.github/workflows/release-on-push.yml`):
 3. Tags are created by CI after successful builds — never tag releases manually, and never commit APKs.
 
 `RELEASE_NOTES.md` holds the current release only and becomes the GitHub Release body; `CHANGELOG.md` accumulates full history. Keep both in that role.
+
+The workflow pins Flutter **3.47.5** on purpose: the repository's Gradle wrapper is 8.14 with AGP 8.11.1, and a newer Flutter stable ships a Gradle plugin that requires Gradle ≥ 9.3.1, which AGP 8.11 does not support. Moving to a newer Flutter is a deliberate upgrade (wrapper + AGP + a full re-validation), after which the `flutter-version` pin in the workflow is bumped in the same change.
 
 CI does release automation only. Device-level validation (the `integration_test/` instruments, including the channels smoke) is run locally against a real device — see [the instruments section above](#integration-instruments-device-only) — and is never repeated in the workflow.
 
