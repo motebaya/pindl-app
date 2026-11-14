@@ -52,7 +52,6 @@ jobs:
         id: state
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.ver.outputs.tag }}
         run: |
           set -euo pipefail
@@ -107,17 +106,11 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      # Pinned, not `channel: stable`. The project's Gradle wrapper (8.14) and
-      # AGP (8.11.1) are the toolchain the 3.1.1 APKs were built and tested with.
-      # A newer stable pulls a flutter-gradle-plugin that requires Gradle >= 9.3.1,
-      # which AGP 8.11 does not support — `stable` therefore breaks the release
-      # build at configure time. Upgrade the wrapper/AGP deliberately, then bump
-      # this pin; never let CI float to a newer Flutter on its own.
-      - name: Setup Flutter 3.47.5 (pinned release toolchain)
-        if: steps.state.outputs.published == 'false'
+      - name: Setup Flutter 3.47.5
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.47.5"
+          channel: stable
           cache: true
 
       - name: Cache Gradle
